@@ -1,0 +1,23 @@
+{
+  // PUBLIC REPO — do not add account_id, secrets, or env values here.
+  // Use `wrangler secret put <NAME>` or the Cloudflare dashboard for credentials.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "plinken-org-site",
+  "main": ".svelte-kit/cloudflare/_worker.js",
+  "compatibility_date": "2026-05-13",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".svelte-kit/cloudflare",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+  // Custom domains — uncomment once plinken.org is added as a zone on this CF account
+  // (Cloudflare dashboard → Websites → Add a site → plinken.org, point nameservers to CF):
+  //   "routes": [
+  //     { "pattern": "plinken.org", "custom_domain": true },
+  //     { "pattern": "www.plinken.org", "custom_domain": true }
+  //   ]
+}

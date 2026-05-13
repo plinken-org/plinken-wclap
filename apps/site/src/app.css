@@ -1,0 +1,96 @@
+:root {
+  color-scheme: dark;
+
+  /* plinken.com brand palette */
+  --bg: #191919;
+  --bg-deep: #000;
+  --bg-elev: #1f1f1f;
+  --bg-elev-2: #2a2a2a;
+  --border: #303747;
+  --border-soft: #373737;
+  --text: #e8e8e8;
+  --text-muted: #c2c2c2;
+  --text-dim: #5a5a5a;
+
+  --accent: #8691da;        /* lavender */
+  --accent-deep: #6773be;   /* periwinkle */
+  --accent-purple: #925db3; /* purple */
+  --accent-teal: #4ea3a5;   /* teal */
+  --accent-pop: #0f0;       /* sparingly */
+
+  --font-display: 'Unbounded', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-mono: 'Courier Prime', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(
+      ellipse 70% 50% at 50% -5%,
+      rgba(134, 145, 218, 0.18),
+      transparent 65%
+    ),
+    radial-gradient(
+      ellipse 60% 45% at 90% 100%,
+      rgba(146, 93, 179, 0.14),
+      transparent 65%
+    ),
+    radial-gradient(
+      ellipse 40% 30% at 10% 90%,
+      rgba(78, 163, 165, 0.08),
+      transparent 70%
+    ),
+    var(--bg);
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+a:hover {
+  color: var(--accent-purple);
+  border-bottom-color: currentColor;
+}
+
+code,
+kbd,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+code {
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+  color: var(--accent);
+}
+
+::selection {
+  background: rgba(146, 93, 179, 0.45);
+  color: var(--text);
+}

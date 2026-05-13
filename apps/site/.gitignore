@@ -1,0 +1,20 @@
+node_modules
+/build
+/.svelte-kit
+/package
+/dist
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# Cloudflare / Wrangler local state
+.wrangler/
+worker-configuration.d.ts
+
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
