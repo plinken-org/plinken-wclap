@@ -26,6 +26,7 @@ interface RunningGraph {
   analyserL: AnalyserNode;
   analyserR: AnalyserNode;
   meterTimer: number;
+  blobUrl: string | null;
 }
 
 const ui = getElements();
@@ -91,12 +92,39 @@ async function loadPlugin(file: File): Promise<void> {
 
   await teardown();
 
+  let blobUrl: string | null = null;
+
   try {
     const buf = await file.arrayBuffer();
 
-    // `getWclap()` (inside ClapAudioNode) accepts a raw ArrayBuffer that's
-    // either bare wasm or a tar.gz bundle. It sniffs which.
-    const node = new ClapAudioNode({ module: buf });
+    // Upstream `getWclap()` only unpacks `.tar.gz` bundles when handed a URL —
+    // passing `{ module: arrayBuffer }` goes straight to `WebAssembly.compile`
+    // and fails on the gzip magic. Sniff the header: bare wasm keeps the
+    // direct path; gzip gets re-fed via a blob URL so the upstream tar.gz
+    // path runs.
+    const head = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
+    const isWasm =
+      head[0] === 0x00 &&
+      head[1] === 0x61 &&
+      head[2] === 0x73 &&
+      head[3] === 0x6d;
+    const isGzip = head[0] === 0x1f && head[1] === 0x8b;
+
+    let node: ClapAudioNode;
+    if (isWasm) {
+      node = new ClapAudioNode({ module: buf });
+    } else if (isGzip) {
+      const blob = new Blob([buf], { type: 'application/gzip' });
+      blobUrl = URL.createObjectURL(blob);
+      node = new ClapAudioNode({ url: blobUrl });
+    } else {
+      const hex = Array.from(head, (b) => b.toString(16).padStart(2, '0')).join(
+        ' '
+      );
+      throw new Error(
+        `Unrecognized bundle format (header: ${hex}). Expected bare \`.wasm\` (00 61 73 6d) or \`.tar.gz\` (1f 8b).`
+      );
+    }
 
     setStatus(ui, 'Compiling plugin…');
     const plugins = await node.plugins();
@@ -177,7 +205,8 @@ async function loadPlugin(file: File): Promise<void> {
       effect,
       analyserL,
       analyserR,
-      meterTimer
+      meterTimer,
+      blobUrl
     };
 
     setStatus(ui, 'Ready — press Play to hear the test tone.');
@@ -185,6 +214,7 @@ async function loadPlugin(file: File): Promise<void> {
   } catch (err) {
     showError(ui, err);
     setStatus(ui, 'Failed to load plugin. See error below.');
+    if (blobUrl) URL.revokeObjectURL(blobUrl);
     await teardown();
   }
 }
@@ -208,6 +238,7 @@ async function teardown(): Promise<void> {
   } catch {
     // Already closed — ignore.
   }
+  if (current.blobUrl) URL.revokeObjectURL(current.blobUrl);
   current = null;
   setMeters(ui, 0, 0);
 }
