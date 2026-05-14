@@ -57,7 +57,23 @@ importers:
         specifier: ^4.90.1
         version: 4.90.1(@cloudflare/workers-types@4.20260511.1)
 
+  plugins/com.plinken/auto-pan:
+    dependencies:
+      '@assemblyscript/wasi-shim':
+        specifier: ^0.1.0
+        version: 0.1.0
+      as-clap:
+        specifier: github:geraintluff/as-clap
+        version: git+https://git@github.com:geraintluff/as-clap.git#ee5293e272e373c3317d0662491f211810f7b8b2
+    devDependencies:
+      assemblyscript:
+        specifier: ^0.28.9
+        version: 0.28.17
+
 packages:
+
+  '@assemblyscript/wasi-shim@0.1.0':
+    resolution: {integrity: sha512-fSLH7MdJHf2uDW5llA5VCF/CG62Jp2WkYGui9/3vIWs3jDhViGeQF7nMYLUjpigluM5fnq61I6obtCETy39FZw==}
 
   '@cloudflare/kv-asset-handler@0.5.0':
     resolution: {integrity: sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg==}
@@ -804,9 +820,22 @@ packages:
     resolution: {integrity: sha512-Z/ZeOgVl7bcSYZ/u/rh0fOpvEpq//LZmdbkXyc7syVzjPAhfOa9ebsdTSjEBDU4vs5nC98Kfduj1uFo0qyET3g==}
     engines: {node: '>= 0.4'}
 
+  as-clap@git+https://git@github.com:geraintluff/as-clap.git#ee5293e272e373c3317d0662491f211810f7b8b2:
+    resolution: {commit: ee5293e272e373c3317d0662491f211810f7b8b2, repo: git@github.com:geraintluff/as-clap.git, type: git}
+    version: 1.0.0
+
+  assemblyscript@0.28.17:
+    resolution: {integrity: sha512-+S0Y7pwLiJngik0bt63XAswcN3Mu0szjvl2aCRWJ9U+5214e93HIt1waTBGFq0yLa8LJBBziw95BaAs5FNfz5Q==}
+    engines: {node: '>=20', npm: '>=10'}
+    hasBin: true
+
   axobject-query@4.1.0:
     resolution: {integrity: sha512-qIj0G9wZbMGNLjLmg1PT6v2mE9AH2zlnADJD/2tC6E00hgmhUOfEB6greHPAfLRSufHqROIUTkw6E+M3lH0PTQ==}
     engines: {node: '>= 0.4'}
+
+  binaryen@129.0.0-nightly.20260428:
+    resolution: {integrity: sha512-RpjRVPZw8NOhkGzx3tTaKYdv4C+zO1VVI0VB9GSCNLM81flHOAZUwRJTLDM3Hqco3OmwB8hTLpkkpMSJjUfHXw==}
+    hasBin: true
 
   blake3-wasm@2.1.5:
     resolution: {integrity: sha512-F1+K8EbfOZE49dtoPtmxUQrpXaBIl3ICvasLh+nJta0xkz+9kF/7uet9fLnwKqhDrmj6g+6K3Tw9yQPUg2ka5g==}
@@ -894,6 +923,9 @@ packages:
 
   locate-character@3.0.0:
     resolution: {integrity: sha512-SW13ws7BjaeJ6p7Q6CO2nchbYEc3X3J6WrmTTDto7yMPqVSZTUyY5Tjbid+Ab8gLnATtygYtiDIJGQRRn2ZOiA==}
+
+  long@5.3.2:
+    resolution: {integrity: sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA==}
 
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
@@ -1087,6 +1119,8 @@ packages:
     resolution: {integrity: sha512-B58NGBEoc8Y9MWWCQGl/gq9xBCe4IiKM0a2x7GZdQKOW5Exr8S1W24J6OgM1njK8xCRGvAJIL/MxXHf6SkmQKQ==}
 
 snapshots:
+
+  '@assemblyscript/wasi-shim@0.1.0': {}
 
   '@cloudflare/kv-asset-handler@0.5.0': {}
 
@@ -1553,7 +1587,16 @@ snapshots:
 
   aria-query@5.3.1: {}
 
+  as-clap@git+https://git@github.com:geraintluff/as-clap.git#ee5293e272e373c3317d0662491f211810f7b8b2: {}
+
+  assemblyscript@0.28.17:
+    dependencies:
+      binaryen: 129.0.0-nightly.20260428
+      long: 5.3.2
+
   axobject-query@4.1.0: {}
+
+  binaryen@129.0.0-nightly.20260428: {}
 
   blake3-wasm@2.1.5: {}
 
@@ -1652,6 +1695,8 @@ snapshots:
   kleur@4.1.5: {}
 
   locate-character@3.0.0: {}
+
+  long@5.3.2: {}
 
   magic-string@0.30.21:
     dependencies:

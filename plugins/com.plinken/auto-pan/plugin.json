@@ -1,0 +1,13 @@
+{
+  "id": "com.plinken.auto-pan",
+  "name": "Auto-Pan",
+  "vendor": "Plinken",
+  "version": "0.1.0",
+  "description": "Stereo auto-panner with sine LFO. Two parameters: speed (Hz) and wet/dry mix.",
+  "features": ["audio-effect", "utility"],
+  "license": "MIT",
+  "homepage": "https://plinken.org",
+  "source": "assembly/",
+  "artifact": "dist/auto-pan.wclap.wasm",
+  "format": "wasm"
+}

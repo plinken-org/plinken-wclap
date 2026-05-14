@@ -1,0 +1,27 @@
+{
+  "extends": "./node_modules/@assemblyscript/wasi-shim/asconfig.json",
+  "entries": [
+    "./assembly/index.ts"
+  ],
+  "targets": {
+    "debug": {
+      "outFile": "./dist/auto-pan.debug.wclap.wasm",
+      "sourceMap": true,
+      "debug": true
+    },
+    "release": {
+      "outFile": "./dist/auto-pan.wclap.wasm",
+      "optimizeLevel": 3,
+      "shrinkLevel": 0,
+      "converge": true,
+      "noAssert": false
+    }
+  },
+  "options": {
+    "exportStart": "_initialize",
+    "importMemory": false,
+    "sharedMemory": false,
+    "exportTable": true,
+    "enable": ["simd", "relaxed-simd"]
+  }
+}

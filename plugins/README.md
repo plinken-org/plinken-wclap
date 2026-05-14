@@ -10,20 +10,50 @@ directory is the source of truth for the bundles we ship on the shelf at
 
 ```
 plugins/
-├── <reverse-dns-vendor>/        # e.g. com.plinken, com.example
-│   ├── README.md                # who you are, contact, licensing
-│   └── <plugin-name>/           # one folder per authored plugin
-│       ├── README.md            # what the plugin does
-│       ├── LICENSE              # MIT or Apache-2.0, required
-│       ├── src/                 # plugin sources (Rust, C++, AS, …)
-│       └── dist/                # built artifact: <plugin>.wclap.tar.gz
-│                                # or bare <plugin>.wasm
+├── <reverse-dns-vendor>/         # e.g. com.plinken, com.example
+│   ├── README.md                 # who you are, contact, licensing
+│   └── <plugin-name>/            # one folder per authored plugin
+│       ├── plugin.json           # plugin manifest (see below)
+│       ├── package.json          # if it's a pnpm/npm build (AS, JS tooling)
+│       ├── README.md             # what the plugin does
+│       ├── LICENSE               # MIT or Apache-2.0, required
+│       ├── assembly/ | src/      # plugin sources (Rust, C++, AS, …)
+│       └── dist/                 # built artifact, ignored by git;
+│                                 # ships at apps/wclap-host/public/samples/
 ```
 
 Vendor folders use **reverse-DNS naming** (Java package style). The directory
 name maps to the vendor's domain backwards — `com.plinken`, `com.signalsmith`,
 `io.example`. Dots in directory names are fine on every supported OS, in git,
 and in pnpm globs.
+
+## Plugin manifest (`plugin.json`)
+
+Every plugin folder ships a small `plugin.json` describing the bundle. The
+fields mirror what the CLAP descriptor exposes at runtime, plus build/ship
+hints. This file is the contract that a future **MCP-driven registry** will
+read to expose plugins to AI agents and to auto-update the host's shelf
+from PRs.
+
+```json
+{
+  "id": "com.plinken.auto-pan",
+  "name": "Auto-Pan",
+  "vendor": "Plinken",
+  "version": "0.1.0",
+  "description": "Stereo auto-panner with sine LFO.",
+  "features": ["audio-effect", "utility"],
+  "license": "MIT",
+  "homepage": "https://plinken.org",
+  "source": "assembly/",
+  "artifact": "dist/auto-pan.wclap.wasm",
+  "format": "wasm"
+}
+```
+
+`format` is either `"wasm"` (bare WCLAP wasm — no webview UI assets) or
+`"tar.gz"` (a `.wclap.tar.gz` bundle that ships HTML and resources for the
+plugin GUI).
 
 ## How to contribute a plugin
 
@@ -47,15 +77,29 @@ and in pnpm globs.
 ## What gets shipped on the shelf
 
 The shelf chips in `apps/wclap-host/src/main.ts` reference plugin bundles
-under `apps/wclap-host/public/samples/`. To get your plugin on the live
-shelf, your PR can additionally:
+under `apps/wclap-host/public/samples/`. Until the aggregator script lands,
+shipping a plugin to the live shelf takes two manual steps in the same PR:
 
-- Copy your `dist/<plugin>.wclap.tar.gz` (or `.wasm`) into
-  `apps/wclap-host/public/samples/<vendor>-<plugin>.<ext>`
-- Add a new entry to the `SHELF` array in `apps/wclap-host/src/main.ts`
+1. Copy your built artifact into the host's samples directory using the
+   plugin id as the filename:
+   - `dist/<plugin>.wclap.wasm` → `apps/wclap-host/public/samples/<id>.wclap.wasm`
+   - `dist/<plugin>.wclap.tar.gz` → `apps/wclap-host/public/samples/<id>.wclap.tar.gz`
+2. Add an entry to the `SHELF` array in `apps/wclap-host/src/main.ts`
+   pointing at `/samples/<id>.<ext>`.
 
-Or just publish the plugin here and we'll wire the shelf entry in a
-follow-up.
+### Coming: MCP-driven plugin registry
+
+The next step is an aggregator that walks `plugins/*/*/plugin.json`,
+collects manifests + built artifacts, and:
+
+- writes a single `shelf.json` consumed at runtime by `wclap-host`
+  (replacing the hard-coded `SHELF` constant), and
+- exposes the same manifest via an **MCP server** so AI agents (and other
+  hosts) can discover and load community plugins programmatically.
+
+With that in place, merging a plugin PR is enough — no host code edit.
+That's also why we want every plugin folder to carry a complete
+`plugin.json` from day one.
 
 ## License of this directory
 

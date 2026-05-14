@@ -31,6 +31,11 @@ interface ShelfItem {
 
 const SHELF: ShelfItem[] = [
   {
+    id: 'com.plinken.auto-pan',
+    label: 'Plinken: Auto-Pan',
+    url: '/samples/com.plinken.auto-pan.wclap.wasm'
+  },
+  {
     id: 'signalsmith-basics',
     label: 'Signalsmith Basics',
     url: '/samples/signalsmith-basics.wclap.tar.gz'
