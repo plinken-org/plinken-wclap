@@ -123,71 +123,165 @@ h1 {
   margin: 0;
 }
 
-.drop {
-  display: block;
-  border: 2px dashed var(--border);
-  border-radius: 12px;
-  padding: 3rem 1.5rem;
-  text-align: center;
-  background: rgba(31, 31, 31, 0.4);
-  cursor: pointer;
-  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+.rackSection {
+  margin-bottom: 0.5rem;
 }
-.drop:hover,
-.drop:focus-visible {
-  border-color: var(--accent-deep);
-  outline: none;
+.sectionHead {
+  margin: 0 0 0.5rem;
 }
-.drop.is-dragover {
-  border-color: var(--accent-purple);
-  background: rgba(146, 93, 179, 0.08);
-  transform: scale(1.01);
+.sectionHeadShelf {
+  margin-top: 1.5rem;
 }
-.dropHeadline {
+.sectionTitle {
   font-family: var(--font-display);
-  font-size: 1.25rem;
-  font-weight: 500;
-  margin-bottom: 0.35rem;
-}
-.dropSub {
-  font-family: var(--font-mono);
   font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 0.25rem;
+}
+.sectionSub {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
   color: var(--text-dim);
-  letter-spacing: 0.04em;
+  margin: 0;
 }
 
-.sampleHint {
-  margin: 0.85rem 0 0;
+.rack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.rackSlot {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.85rem 1rem;
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  background: rgba(31, 31, 31, 0.35);
+  min-height: 3.4rem;
+  transition: border-color 140ms ease, background 140ms ease,
+    transform 140ms ease;
+}
+.rackSlot.empty {
+  color: var(--text-dim);
+}
+.rackSlot.occupied {
+  border-style: solid;
+  border-color: var(--accent-deep);
+  background: rgba(134, 145, 218, 0.06);
+  color: var(--text);
+}
+.rackSlot.dragOver {
+  border-color: var(--accent-purple);
+  background: rgba(146, 93, 179, 0.10);
+  transform: scale(1.005);
+}
+.rackSlot.loading {
+  opacity: 0.7;
+}
+.slotNum {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  min-width: 1.4rem;
+}
+.slotLabel {
+  flex: 1;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 500;
+  word-break: break-word;
+}
+.rackSlot.empty .slotLabel {
   font-family: var(--font-mono);
   font-size: 0.82rem;
-  color: var(--text-dim);
-  text-align: center;
+  font-weight: 400;
+  letter-spacing: 0.02em;
 }
-.sampleBtn {
+.slotDelete {
   font: inherit;
   font-family: var(--font-mono);
-  font-size: inherit;
+  font-size: 0.85rem;
+  line-height: 1;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.slotDelete:hover {
+  border-color: var(--accent-warn);
+  color: var(--accent-warn);
+  background: rgba(217, 122, 91, 0.08);
+}
+
+.shelf {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.85rem;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+.shelfChip {
+  display: inline-flex;
+  align-items: center;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
   letter-spacing: 0.02em;
-  padding: 0.25rem 0.7rem;
-  margin: 0 0.15rem;
-  border-radius: 4px;
+  padding: 0.45rem 0.85rem;
+  border-radius: 6px;
   border: 1px solid var(--accent-deep);
   background: rgba(134, 145, 218, 0.08);
   color: var(--accent);
-  cursor: pointer;
+  cursor: grab;
+  user-select: none;
+  /* Block the browser's default touch panning on the chip so a finger drag
+   * stays a drag instead of becoming a page scroll. Pointer events fire as
+   * normal — see startTouchDrag(). */
+  touch-action: none;
   transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
 }
-.sampleBtn:hover:not(:disabled) {
+.shelfChip:hover {
   border-color: var(--accent-purple);
   color: var(--accent-purple);
   background: rgba(146, 93, 179, 0.10);
 }
-.sampleBtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.shelfChip:active {
+  cursor: grabbing;
 }
-.sampleMeta {
+.shelfChipHint {
+  margin-left: 0.4rem;
   color: var(--text-dim);
+}
+
+/* Drag ghost shown during touch drag. Position is set imperatively. */
+.dragGhost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  letter-spacing: 0.02em;
+  padding: 0.45rem 0.85rem;
+  border-radius: 6px;
+  border: 1px solid var(--accent-purple);
+  background: rgba(146, 93, 179, 0.20);
+  color: var(--accent-purple);
+  white-space: nowrap;
+  z-index: 1000;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 
 .status {

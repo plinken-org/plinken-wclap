@@ -10,9 +10,8 @@ function el<T extends HTMLElement>(id: string): T {
 }
 
 export interface UiElements {
-  drop: HTMLElement;
-  fileInput: HTMLInputElement;
-  sampleBtn: HTMLButtonElement;
+  rack: HTMLElement;
+  shelf: HTMLElement;
   statusLabel: HTMLElement;
   pluginLabel: HTMLElement;
   sampleRateLabel: HTMLElement;
@@ -27,9 +26,8 @@ export interface UiElements {
 
 export function getElements(): UiElements {
   return {
-    drop: el<HTMLElement>('drop'),
-    fileInput: el<HTMLInputElement>('fileInput'),
-    sampleBtn: el<HTMLButtonElement>('sampleBtn'),
+    rack: el<HTMLElement>('rack'),
+    shelf: el<HTMLElement>('shelf'),
     statusLabel: el<HTMLElement>('statusLabel'),
     pluginLabel: el<HTMLElement>('pluginLabel'),
     sampleRateLabel: el<HTMLElement>('sampleRateLabel'),
@@ -90,44 +88,4 @@ export function setMeters(ui: UiElements, rmsL: number, rmsR: number): void {
   };
   ui.meterL.style.width = `${toPct(rmsL)}%`;
   ui.meterR.style.width = `${toPct(rmsR)}%`;
-}
-
-/**
- * Wire drag/drop + click-to-pick onto the drop zone. Calls `onFile` with the
- * first dropped/picked file. Returns nothing — the listeners live for the
- * lifetime of the page.
- */
-export function wireDropZone(
-  ui: UiElements,
-  onFile: (file: File) => void
-): void {
-  const onDragOver = (e: DragEvent): void => {
-    e.preventDefault();
-    ui.drop.classList.add('is-dragover');
-  };
-  const onDragLeave = (): void => {
-    ui.drop.classList.remove('is-dragover');
-  };
-  const onDrop = (e: DragEvent): void => {
-    e.preventDefault();
-    ui.drop.classList.remove('is-dragover');
-    const file =
-      e.dataTransfer?.items?.[0]?.getAsFile?.() ?? e.dataTransfer?.files?.[0];
-    if (file) onFile(file);
-  };
-
-  ui.drop.addEventListener('dragover', onDragOver);
-  ui.drop.addEventListener('dragleave', onDragLeave);
-  ui.drop.addEventListener('drop', onDrop);
-  ui.drop.addEventListener('click', () => ui.fileInput.click());
-  ui.drop.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      ui.fileInput.click();
-    }
-  });
-  ui.fileInput.addEventListener('change', () => {
-    const file = ui.fileInput.files?.[0];
-    if (file) onFile(file);
-  });
 }

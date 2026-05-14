@@ -33,39 +33,25 @@
         </p>
       </header>
 
-      <section
-        id="drop"
-        class="drop"
-        role="button"
-        tabindex="0"
-        aria-label="Drop a .wclap file here, or click to choose one"
-      >
-        <div class="dropInner">
-          <div class="dropHeadline">Drop a <code>.wclap</code> here</div>
-          <div class="dropSub">or click to choose a file</div>
-          <input
-            id="fileInput"
-            type="file"
-            accept=".wclap,application/gzip,application/x-gzip,application/octet-stream"
-            hidden
-          />
+      <section class="rackSection" aria-label="FX rack">
+        <div class="sectionHead">
+          <h2 class="sectionTitle">FX Chain</h2>
+          <p class="sectionSub">
+            Drop a <code>.wclap</code> file — or drag a shelf chip — onto any
+            slot. Slots run top → bottom. Empty slots pass through.
+          </p>
         </div>
-      </section>
+        <div id="rack" class="rack"></div>
 
-      <p class="sampleHint">
-        No <code>.wclap</code> handy?
-        <button id="sampleBtn" type="button" class="sampleBtn">
-          Try Signalsmith Basics
-        </button>
-        <span class="sampleMeta">— MIT, ~210&nbsp;KB,
-          <a
-            href="https://github.com/WebCLAP/examples/tree/main/signalsmith-basics"
-            target="_blank"
-            rel="noreferrer noopener"
-            >source</a
-          ></span
-        >
-      </p>
+        <div class="sectionHead sectionHeadShelf">
+          <h2 class="sectionTitle">Shelf</h2>
+          <p class="sectionSub">
+            Drag a chip onto a slot, or click to drop into the first empty
+            slot.
+          </p>
+        </div>
+        <div id="shelf" class="shelf"></div>
+      </section>
 
       <section class="status" aria-live="polite">
         <dl class="statusGrid">

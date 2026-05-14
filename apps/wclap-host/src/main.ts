@@ -5,9 +5,6 @@ import './wclap-runtime/cap-wasm-memory';
 import ClapAudioNode, {
   type ClapEffectAudioNode
 } from './wclap-runtime/clap-audionode.mjs';
-// Vite bundles this module standalone (resolving its imports against the
-// alias) and returns its URL as a string. AudioWorklet.addModule accepts the
-// same ES module bundle that a Worker would.
 import workletUrl from './wclap-runtime/clap-audioworkletprocessor.mjs?worker&url';
 import {
   clearError,
@@ -18,76 +15,99 @@ import {
   setPlugin,
   setSampleRate,
   setStatus,
-  showError,
-  wireDropZone
+  showError
 } from './ui';
 
-interface RunningGraph {
+const NUM_SLOTS = 5;
+const SHELF_DT_TYPE = 'application/x-plinken-shelf-id';
+
+interface ShelfItem {
+  id: string;
+  label: string;
+  url: string;
+  hint?: string;
+}
+
+const SHELF: ShelfItem[] = [
+  {
+    id: 'signalsmith-basics',
+    label: 'Signalsmith Basics',
+    url: '/samples/signalsmith-basics.wclap.tar.gz'
+  },
+  {
+    id: 'signalsmith-clap-cpp',
+    label: 'Signalsmith CLAP C++',
+    url: '/samples/signalsmith-clap-cpp.wclap.tar.gz'
+  },
+  {
+    id: 'clack-gain',
+    label: 'clack: gain',
+    url: '/samples/clack-gain.wasm'
+  },
+  {
+    id: 'clack-polysynth',
+    label: 'clack: polysynth',
+    url: '/samples/clack-polysynth.wasm',
+    hint: 'needs MIDI'
+  },
+  {
+    id: 'as-clap',
+    label: 'as-clap: example',
+    url: '/samples/as-clap-example.wclap.wasm'
+  }
+];
+
+interface Slot {
+  effect: ClapEffectAudioNode | null;
+  node: ClapAudioNode | null;
+  blobUrl: string | null;
+  label: string;
+}
+
+function emptySlot(): Slot {
+  return { effect: null, node: null, blobUrl: null, label: '' };
+}
+
+const slots: Slot[] = Array.from({ length: NUM_SLOTS }, emptySlot);
+
+interface BaseGraph {
   ctx: AudioContext;
   oscL: OscillatorNode;
   oscR: OscillatorNode;
-  effect: ClapEffectAudioNode | null;
+  inGain: GainNode;
+  splitter: ChannelSplitterNode;
   analyserL: AnalyserNode;
   analyserR: AnalyserNode;
   meterTimer: number;
-  blobUrl: string | null;
 }
+
+let baseGraph: BaseGraph | null = null;
+let workletReady = false;
 
 const ui = getElements();
 
 setCoi(ui, globalThis.crossOriginIsolated === true);
 setAudioState(ui, 'idle (no context)');
-setStatus(ui, 'Press Play for a 440 Hz test tone, or drop a .wclap to chain a plugin.');
-setPlugin(ui, '(no plugin — direct test tone)');
+setSampleRate(ui, null);
+setPlugin(ui, '—');
+setStatus(
+  ui,
+  'Drop plugins into the rack, then press Play for the 440 Hz test tone.'
+);
 
-let current: RunningGraph | null = null;
-
-// Enable Play right away. The graph is built on first click — inside the
-// user gesture, which keeps the autoplay policy happy on every browser.
 ui.playBtn.disabled = false;
+ui.playBtn.addEventListener('click', () => void onPlay());
+ui.stopBtn.addEventListener('click', () => void onStop());
 
-wireDropZone(ui, (file) => {
-  void loadPlugin(file);
-});
-
-const SAMPLE_URL = '/samples/signalsmith-basics.wclap.tar.gz';
-const SAMPLE_NAME = 'signalsmith-basics.wclap';
-
-ui.sampleBtn.addEventListener('click', () => {
-  void loadSample();
-});
-
-async function loadSample(): Promise<void> {
-  ui.sampleBtn.disabled = true;
-  try {
-    setStatus(ui, `Fetching ${SAMPLE_NAME}…`);
-    const res = await fetch(SAMPLE_URL);
-    if (!res.ok) throw new Error(`Fetch failed: ${res.status} ${res.statusText}`);
-    const blob = await res.blob();
-    const file = new File([blob], SAMPLE_NAME, { type: 'application/gzip' });
-    await loadPlugin(file);
-  } catch (err) {
-    showError(ui, err);
-    setStatus(ui, 'Failed to fetch sample plugin. See error below.');
-  } finally {
-    ui.sampleBtn.disabled = false;
-  }
-}
-
-ui.playBtn.addEventListener('click', () => {
-  void onPlay();
-});
+renderShelf();
+renderRack();
 
 async function onPlay(): Promise<void> {
   ui.playBtn.disabled = true;
   try {
-    if (!current) {
-      await loadRawTestTone();
-    }
-    if (!current) return;
-    const label = current.effect ? 'plugin' : 'no plugin';
-    await current.ctx.resume();
-    setStatus(ui, `Playing — 440 Hz test tone (${label}).`);
+    const graph = await ensureBaseGraph();
+    await graph.ctx.resume();
+    setStatus(ui, statusForRunning());
     ui.stopBtn.disabled = false;
   } catch (err) {
     showError(ui, err);
@@ -96,107 +116,92 @@ async function onPlay(): Promise<void> {
   }
 }
 
-ui.stopBtn.addEventListener('click', () => {
-  if (!current) return;
-  void current.ctx.suspend().then(() => {
-    setStatus(ui, 'Stopped — press Play to resume.');
-    ui.playBtn.disabled = false;
-    ui.stopBtn.disabled = true;
-  });
-});
-
-async function loadPlugin(file: File): Promise<void> {
-  clearError(ui);
-  setStatus(ui, `Loading ${file.name}…`);
-  setPlugin(ui, '—');
-  setSampleRate(ui, null);
-  ui.playBtn.disabled = true;
+async function onStop(): Promise<void> {
+  if (!baseGraph) return;
+  await baseGraph.ctx.suspend();
+  setStatus(ui, 'Stopped — press Play to resume.');
+  ui.playBtn.disabled = false;
   ui.stopBtn.disabled = true;
-
-  await teardown();
-
-  let blobUrl: string | null = null;
-
-  try {
-    const buf = await file.arrayBuffer();
-
-    // Upstream `getWclap()` only unpacks `.tar.gz` bundles when handed a URL —
-    // passing `{ module: arrayBuffer }` goes straight to `WebAssembly.compile`
-    // and fails on the gzip magic. Sniff the header: bare wasm keeps the
-    // direct path; gzip gets re-fed via a blob URL so the upstream tar.gz
-    // path runs.
-    const head = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
-    const isWasm =
-      head[0] === 0x00 &&
-      head[1] === 0x61 &&
-      head[2] === 0x73 &&
-      head[3] === 0x6d;
-    const isGzip = head[0] === 0x1f && head[1] === 0x8b;
-
-    let node: ClapAudioNode;
-    if (isWasm) {
-      node = new ClapAudioNode({ module: buf });
-    } else if (isGzip) {
-      const blob = new Blob([buf], { type: 'application/gzip' });
-      blobUrl = URL.createObjectURL(blob);
-      node = new ClapAudioNode({ url: blobUrl });
-    } else {
-      const hex = Array.from(head, (b) => b.toString(16).padStart(2, '0')).join(
-        ' '
-      );
-      throw new Error(
-        `Unrecognized bundle format (header: ${hex}). Expected bare \`.wasm\` (00 61 73 6d) or \`.tar.gz\` (1f 8b).`
-      );
-    }
-
-    setStatus(ui, 'Compiling plugin…');
-    const plugins = await node.plugins();
-    if (plugins.length === 0) {
-      throw new Error('No CLAP plugins found in bundle.');
-    }
-    const first = plugins[0];
-    if (!first) throw new Error('Plugin list was empty after length check.');
-
-    const ctx = new AudioContext();
-    setSampleRate(ui, ctx.sampleRate);
-    wireAudioState(ctx);
-
-    setStatus(ui, 'Starting AudioWorklet…');
-    // Pre-register the worklet processor with the Vite-bundled URL. The
-    // patched clap-audionode.mjs no longer attempts its own addModule call.
-    await ctx.audioWorklet.addModule(workletUrl);
-
-    const effect = await node.createNode(ctx, first.id ?? null, {
-      numberOfInputs: 1,
-      numberOfOutputs: 1,
-      outputChannelCount: [2]
-    });
-
-    const descriptor = effect.descriptor;
-    const labelParts = [descriptor.name];
-    if (descriptor.vendor) labelParts.push(`(${descriptor.vendor})`);
-    setPlugin(ui, labelParts.join(' '));
-
-    await buildToneGraph(ctx, effect, blobUrl);
-
-    setStatus(ui, 'Ready — press Play to hear the test tone.');
-    ui.playBtn.disabled = false;
-  } catch (err) {
-    showError(ui, err);
-    setStatus(ui, 'Failed to load plugin. See error below.');
-    if (blobUrl) URL.revokeObjectURL(blobUrl);
-    await teardown();
-  }
 }
 
-async function loadRawTestTone(): Promise<void> {
-  clearError(ui);
-  setPlugin(ui, '(no plugin — direct test tone)');
-  await teardown();
+function statusForRunning(): string {
+  const loaded = slots.filter((s) => s.effect).length;
+  if (loaded === 0) return 'Playing — 440 Hz tone (no plugin in chain).';
+  return `Playing — 440 Hz tone through ${loaded} plugin${loaded === 1 ? '' : 's'}.`;
+}
+
+async function ensureBaseGraph(): Promise<BaseGraph> {
+  if (baseGraph) return baseGraph;
+
   const ctx = new AudioContext();
   setSampleRate(ui, ctx.sampleRate);
   wireAudioState(ctx);
-  await buildToneGraph(ctx, null, null);
+
+  const oscL = ctx.createOscillator();
+  const oscR = ctx.createOscillator();
+  oscL.frequency.value = 440;
+  oscR.frequency.value = 440;
+  oscL.type = 'sine';
+  oscR.type = 'sine';
+
+  const merger = ctx.createChannelMerger(2);
+  oscL.connect(merger, 0, 0);
+  oscR.connect(merger, 0, 1);
+
+  const inGain = ctx.createGain();
+  // Single attenuation point for the whole chain. -3 dBFS is loud enough to
+  // hear without trouble; downstream plugins can push it higher if they have
+  // internal makeup gain, but tests so far don't exceed safe levels.
+  inGain.gain.value = 0.7;
+  merger.connect(inGain);
+
+  const splitter = ctx.createChannelSplitter(2);
+  const analyserL = ctx.createAnalyser();
+  const analyserR = ctx.createAnalyser();
+  analyserL.fftSize = 1024;
+  analyserR.fftSize = 1024;
+  splitter.connect(analyserL, 0);
+  splitter.connect(analyserR, 1);
+
+  oscL.start();
+  oscR.start();
+  await ctx.suspend();
+
+  // Peak-meter ballistics: instant attack, ~300 ms exponential release.
+  const METER_INTERVAL_MS = 50;
+  const METER_RELEASE_MS = 300;
+  const RELEASE_COEFF = Math.exp(-METER_INTERVAL_MS / METER_RELEASE_MS);
+  let displayedL = 0;
+  let displayedR = 0;
+  const meterTimer = window.setInterval(() => {
+    const live = ctx.state === 'running';
+    const targetL = live ? rms(analyserL) : 0;
+    const targetR = live ? rms(analyserR) : 0;
+    displayedL = targetL >= displayedL ? targetL : displayedL * RELEASE_COEFF;
+    displayedR = targetR >= displayedR ? targetR : displayedR * RELEASE_COEFF;
+    setMeters(ui, displayedL, displayedR);
+  }, METER_INTERVAL_MS);
+
+  baseGraph = {
+    ctx,
+    oscL,
+    oscR,
+    inGain,
+    splitter,
+    analyserL,
+    analyserR,
+    meterTimer
+  };
+
+  rewire();
+  return baseGraph;
+}
+
+async function ensureWorklet(): Promise<void> {
+  if (workletReady) return;
+  const graph = await ensureBaseGraph();
+  await graph.ctx.audioWorklet.addModule(workletUrl);
+  workletReady = true;
 }
 
 function wireAudioState(ctx: AudioContext): void {
@@ -209,118 +214,366 @@ function wireAudioState(ctx: AudioContext): void {
   };
 }
 
-// Build the test-tone audio graph and assign it to `current`. With an
-// `effect`, the chain is `osc → merger → inGain → effect → (analysers,
-// destination)`. Without one, `inGain` feeds the analysers and destination
-// directly — useful for confirming audio routing without involving a plugin.
-async function buildToneGraph(
-  ctx: AudioContext,
-  effect: ClapEffectAudioNode | null,
-  blobUrl: string | null
-): Promise<void> {
-  // Stereo 440 Hz test tone. Two oscillators so the worklet sees two distinct
-  // input channels; mono-correlated is fine for the PoC.
-  const oscL = ctx.createOscillator();
-  const oscR = ctx.createOscillator();
-  oscL.frequency.value = 440;
-  oscR.frequency.value = 440;
-  oscL.type = 'sine';
-  oscR.type = 'sine';
+// Disconnect everything in the active chain and reconnect:
+//   inGain → slot1.effect → slot2.effect → … → (splitter, destination)
+// Empty slots are skipped (pass-through). Idempotent — call after any slot
+// add/remove/replace.
+function rewire(): void {
+  if (!baseGraph) return;
+  const { inGain, splitter, ctx } = baseGraph;
 
-  const merger = ctx.createChannelMerger(2);
-  oscL.connect(merger, 0, 0);
-  oscR.connect(merger, 0, 1);
-
-  // Plugin path attenuates so plugins with internal gain don't blow eardrums.
-  // The raw path runs at a clearly audible level so a silent-speaker situation
-  // is unambiguous.
-  const inGain = ctx.createGain();
-  inGain.gain.value = effect ? 0.25 : 0.7;
-  merger.connect(inGain);
-
-  const splitter = ctx.createChannelSplitter(2);
-  const analyserL = ctx.createAnalyser();
-  const analyserR = ctx.createAnalyser();
-  analyserL.fftSize = 1024;
-  analyserR.fftSize = 1024;
-
-  // The node that feeds both the splitter (meters) and the destination
-  // (speakers). When a plugin is loaded, that's the effect output; otherwise
-  // it's the input gain — the same 440 Hz tone going straight through.
-  let monitorSource: AudioNode;
-  if (effect) {
-    inGain.connect(effect);
-    monitorSource = effect;
-  } else {
-    monitorSource = inGain;
-  }
-  monitorSource.connect(splitter);
-  splitter.connect(analyserL, 0);
-  splitter.connect(analyserR, 1);
-  monitorSource.connect(ctx.destination);
-
-  oscL.start();
-  oscR.start();
-
-  // Suspend so playback only starts when the user presses Play. AudioContext
-  // also requires a user gesture before it can run; this matches that gate.
-  await ctx.suspend();
-
-  // Peak-meter ballistics: instant attack, ~300 ms exponential release. When
-  // the AudioContext suspends (Stop), targets fall to 0 and the displayed
-  // values decay smoothly instead of freezing at the last frame.
-  const METER_INTERVAL_MS = 50;
-  const METER_RELEASE_MS = 300;
-  const RELEASE_COEFF = Math.exp(-METER_INTERVAL_MS / METER_RELEASE_MS);
-  let displayedL = 0;
-  let displayedR = 0;
-
-  const meterTimer = window.setInterval(() => {
-    const live = ctx.state === 'running';
-    const targetL = live ? rms(analyserL) : 0;
-    const targetR = live ? rms(analyserR) : 0;
-    displayedL = targetL >= displayedL ? targetL : displayedL * RELEASE_COEFF;
-    displayedR = targetR >= displayedR ? targetR : displayedR * RELEASE_COEFF;
-    setMeters(ui, displayedL, displayedR);
-  }, METER_INTERVAL_MS);
-
-  current = {
-    ctx,
-    oscL,
-    oscR,
-    effect,
-    analyserL,
-    analyserR,
-    meterTimer,
-    blobUrl
-  };
-}
-
-async function teardown(): Promise<void> {
-  if (!current) return;
-  window.clearInterval(current.meterTimer);
   try {
-    current.oscL.stop();
-    current.oscR.stop();
+    inGain.disconnect();
   } catch {
-    // Already stopped or never started — ignore.
+    // No prior connections — ignore.
   }
-  if (current.effect) {
-    try {
-      current.effect.disconnect();
-    } catch {
-      // Already disconnected — ignore.
+  for (const slot of slots) {
+    if (slot.effect) {
+      try {
+        slot.effect.disconnect();
+      } catch {
+        // Already disconnected — ignore.
+      }
     }
   }
-  try {
-    await current.ctx.close();
-  } catch {
-    // Already closed — ignore.
+
+  let tail: AudioNode = inGain;
+  for (const slot of slots) {
+    if (slot.effect) {
+      tail.connect(slot.effect);
+      tail = slot.effect;
+    }
   }
-  if (current.blobUrl) URL.revokeObjectURL(current.blobUrl);
-  current = null;
-  setMeters(ui, 0, 0);
-  setAudioState(ui, 'idle (no context)');
+  tail.connect(splitter);
+  tail.connect(ctx.destination);
+
+  refreshPluginSummary();
+}
+
+function refreshPluginSummary(): void {
+  const loaded = slots
+    .map((s, i) => (s.effect ? `${i + 1}: ${s.label}` : null))
+    .filter((x): x is string => x != null);
+  setPlugin(ui, loaded.length === 0 ? '—' : loaded.join(' → '));
+}
+
+async function loadIntoSlot(
+  idx: number,
+  source: File | string,
+  displayHint?: string
+): Promise<void> {
+  if (idx < 0 || idx >= slots.length) return;
+  clearError(ui);
+
+  const slotEl = ui.rack.querySelector<HTMLElement>(
+    `[data-slot-index="${idx}"]`
+  );
+  slotEl?.classList.add('loading');
+
+  try {
+    await ensureWorklet();
+    await unloadSlot(idx, { skipRewire: true });
+
+    let buf: ArrayBuffer;
+    let displayName: string;
+    if (typeof source === 'string') {
+      const res = await fetch(source);
+      if (!res.ok) {
+        throw new Error(`Fetch failed: ${res.status} ${res.statusText}`);
+      }
+      buf = await res.arrayBuffer();
+      displayName = displayHint ?? source.split('/').pop() ?? 'plugin';
+    } else {
+      buf = await source.arrayBuffer();
+      displayName = source.name;
+    }
+
+    setStatus(ui, `Loading ${displayName} into slot ${idx + 1}…`);
+
+    const head = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
+    const isWasm =
+      head[0] === 0x00 &&
+      head[1] === 0x61 &&
+      head[2] === 0x73 &&
+      head[3] === 0x6d;
+    const isGzip = head[0] === 0x1f && head[1] === 0x8b;
+
+    if (!isWasm && !isGzip) {
+      const hex = Array.from(head, (b) =>
+        b.toString(16).padStart(2, '0')
+      ).join(' ');
+      throw new Error(
+        `Unrecognized bundle format (header: ${hex}). Expected bare \`.wasm\` (00 61 73 6d) or \`.tar.gz\` (1f 8b).`
+      );
+    }
+
+    // Always route through a blob URL so upstream `getWclap` takes its
+    // fetch-based path. The `{ module: ArrayBuffer }` branch in
+    // wclap-plugin.mjs has a `guessMemorySize(buffer, module)` bug that
+    // references an undefined identifier and explodes for bare wasm.
+    const mime = isWasm ? 'application/wasm' : 'application/gzip';
+    const blob = new Blob([buf], { type: mime });
+    const blobUrl: string = URL.createObjectURL(blob);
+    const node: ClapAudioNode = new ClapAudioNode({ url: blobUrl });
+
+    const plugins = await node.plugins();
+    if (plugins.length === 0) {
+      throw new Error('No CLAP plugins found in bundle.');
+    }
+    const first = plugins[0];
+    if (!first) {
+      throw new Error('Plugin list was empty after length check.');
+    }
+
+    const graph = baseGraph;
+    if (!graph) throw new Error('Base audio graph missing.');
+
+    const effect = await node.createNode(graph.ctx, first.id ?? null, {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [2]
+    });
+
+    const descriptor = effect.descriptor;
+    const label =
+      descriptor.name +
+      (descriptor.vendor ? ` · ${descriptor.vendor}` : '');
+
+    slots[idx] = { effect, node, blobUrl, label };
+    rewire();
+
+    setStatus(ui, `Slot ${idx + 1}: ${descriptor.name} ready.`);
+    renderRack();
+    if (graph.ctx.state === 'running') {
+      setStatus(ui, statusForRunning());
+    }
+  } catch (err) {
+    showError(ui, err);
+    setStatus(ui, 'Failed to load plugin. See error below.');
+  } finally {
+    slotEl?.classList.remove('loading');
+  }
+}
+
+async function unloadSlot(
+  idx: number,
+  opts: { skipRewire?: boolean } = {}
+): Promise<void> {
+  const slot = slots[idx];
+  if (!slot || !slot.effect) return;
+
+  try {
+    slot.effect.disconnect();
+  } catch {
+    // Already disconnected — ignore.
+  }
+  if (slot.blobUrl) URL.revokeObjectURL(slot.blobUrl);
+
+  slots[idx] = emptySlot();
+  if (!opts.skipRewire) {
+    rewire();
+    if (baseGraph?.ctx.state === 'running') {
+      setStatus(ui, statusForRunning());
+    } else {
+      setStatus(ui, `Slot ${idx + 1} cleared.`);
+    }
+  }
+  renderRack();
+}
+
+function renderRack(): void {
+  ui.rack.innerHTML = '';
+  slots.forEach((slot, idx) => {
+    const slotEl = document.createElement('div');
+    slotEl.className = `rackSlot ${slot.effect ? 'occupied' : 'empty'}`;
+    slotEl.dataset.slotIndex = String(idx);
+
+    const num = document.createElement('span');
+    num.className = 'slotNum';
+    num.textContent = String(idx + 1).padStart(2, '0');
+    slotEl.appendChild(num);
+
+    const label = document.createElement('span');
+    label.className = 'slotLabel';
+    label.textContent = slot.effect ? slot.label : 'drop a plugin here';
+    // TODO: clicking an occupied label should open the plugin's UI (gui ext).
+    // For now this is purely informational.
+    slotEl.appendChild(label);
+
+    if (slot.effect) {
+      const del = document.createElement('button');
+      del.className = 'slotDelete';
+      del.type = 'button';
+      del.textContent = '✕';
+      del.setAttribute(
+        'aria-label',
+        `Remove plugin from slot ${idx + 1}`
+      );
+      del.title = 'Remove plugin';
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void unloadSlot(idx);
+      });
+      slotEl.appendChild(del);
+    }
+
+    slotEl.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+      slotEl.classList.add('dragOver');
+    });
+    slotEl.addEventListener('dragleave', () => {
+      slotEl.classList.remove('dragOver');
+    });
+    slotEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      slotEl.classList.remove('dragOver');
+
+      const shelfId = e.dataTransfer?.getData(SHELF_DT_TYPE);
+      if (shelfId) {
+        const item = SHELF.find((s) => s.id === shelfId);
+        if (item) void loadIntoSlot(idx, item.url, item.label);
+        return;
+      }
+
+      const file = e.dataTransfer?.files?.[0];
+      if (file) void loadIntoSlot(idx, file);
+    });
+
+    ui.rack.appendChild(slotEl);
+  });
+}
+
+function renderShelf(): void {
+  ui.shelf.innerHTML = '';
+  SHELF.forEach((item) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'shelfChip';
+    chip.draggable = true;
+    chip.dataset.shelfId = item.id;
+
+    const labelSpan = document.createElement('span');
+    labelSpan.textContent = item.label;
+    chip.appendChild(labelSpan);
+    if (item.hint) {
+      const hint = document.createElement('span');
+      hint.className = 'shelfChipHint';
+      hint.textContent = `· ${item.hint}`;
+      chip.appendChild(hint);
+    }
+
+    // Mouse / desktop: HTML5 DnD.
+    chip.addEventListener('dragstart', (e) => {
+      if (!e.dataTransfer) return;
+      e.dataTransfer.setData(SHELF_DT_TYPE, item.id);
+      e.dataTransfer.effectAllowed = 'copy';
+    });
+
+    // Touch / pen: HTML5 DnD doesn't fire on iOS, so do it by hand with
+    // Pointer Events. A ghost element follows the finger and on release we
+    // hit-test for the slot under it.
+    chip.addEventListener('pointerdown', (e) => {
+      if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+      startTouchDrag(item, e);
+    });
+
+    chip.addEventListener('click', () => {
+      const idx = slots.findIndex((s) => !s.effect);
+      if (idx < 0) {
+        setStatus(ui, 'Rack is full — remove a plugin first.');
+        return;
+      }
+      void loadIntoSlot(idx, item.url, item.label);
+    });
+
+    ui.shelf.appendChild(chip);
+  });
+}
+
+const DRAG_THRESHOLD_PX = 6;
+
+function startTouchDrag(item: ShelfItem, startEvent: PointerEvent): void {
+  startEvent.preventDefault();
+
+  const startX = startEvent.clientX;
+  const startY = startEvent.clientY;
+  let started = false;
+  let ghost: HTMLElement | null = null;
+
+  const positionGhost = (x: number, y: number): void => {
+    if (!ghost) return;
+    ghost.style.left = `${x}px`;
+    ghost.style.top = `${y}px`;
+  };
+
+  const clearSlotHighlights = (): void => {
+    document.querySelectorAll('.rackSlot.dragOver').forEach((el) => {
+      el.classList.remove('dragOver');
+    });
+  };
+
+  const highlightSlotUnder = (x: number, y: number): HTMLElement | null => {
+    const target = document.elementFromPoint(x, y);
+    const slot = target?.closest<HTMLElement>('.rackSlot') ?? null;
+    document.querySelectorAll('.rackSlot.dragOver').forEach((el) => {
+      if (el !== slot) el.classList.remove('dragOver');
+    });
+    if (slot) slot.classList.add('dragOver');
+    return slot;
+  };
+
+  const onMove = (ev: PointerEvent): void => {
+    if (!started) {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+      started = true;
+      ghost = document.createElement('div');
+      ghost.className = 'dragGhost';
+      ghost.textContent = item.label;
+      document.body.appendChild(ghost);
+    }
+    positionGhost(ev.clientX, ev.clientY);
+    highlightSlotUnder(ev.clientX, ev.clientY);
+  };
+
+  const onEnd = (ev: PointerEvent): void => {
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onEnd);
+    window.removeEventListener('pointercancel', onCancel);
+
+    const slot = started ? highlightSlotUnder(ev.clientX, ev.clientY) : null;
+    clearSlotHighlights();
+    if (ghost) {
+      ghost.remove();
+      ghost = null;
+    }
+
+    if (slot?.dataset.slotIndex != null) {
+      const idx = Number.parseInt(slot.dataset.slotIndex, 10);
+      if (Number.isFinite(idx)) {
+        void loadIntoSlot(idx, item.url, item.label);
+      }
+    }
+  };
+
+  const onCancel = (): void => {
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onEnd);
+    window.removeEventListener('pointercancel', onCancel);
+    clearSlotHighlights();
+    if (ghost) {
+      ghost.remove();
+      ghost = null;
+    }
+  };
+
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onEnd);
+  window.addEventListener('pointercancel', onCancel);
 }
 
 const rmsScratch = new Float32Array(1024);
