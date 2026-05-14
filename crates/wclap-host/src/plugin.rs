@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 
 #[cfg(target_arch = "wasm32")]
 use crate::{
-    call::{read_result_u32, write_arg_u32, SLOT_SIZE},
+    call::{read_result_u32, write_arg_f64, write_arg_u32, SLOT_SIZE},
     clap, host,
     host::HostStubIndices,
     host_stubs,
@@ -33,10 +33,15 @@ use crate::{
     },
 };
 
-#[allow(dead_code)] // fields read by wasm32 process path (step 7).
+#[allow(dead_code)] // fields read by wasm32 process / mainThread paths.
 pub(crate) struct Plugin {
     pub(crate) instance_handle: u32,
+    pub(crate) hosted_handle: u32,
     pub(crate) plugin_ptr: u32,
+    /// `clap_process_t` allocated in plugin memory by `pluginStart`. Same
+    /// struct is reused every block; `pluginProcess` only mutates
+    /// `frames_count`.
+    pub(crate) process_ptr: u32,
 }
 
 pub(crate) struct PluginPool {
@@ -110,6 +115,9 @@ unsafe fn register_stubs(inst: u32, hosted_handle: u32) -> HostStubIndices {
         request_restart: reg(host_stubs::request_restart_index(), host_stubs::SIG_VI),
         request_process: reg(host_stubs::request_process_index(), host_stubs::SIG_VI),
         request_callback: reg(host_stubs::request_callback_index(), host_stubs::SIG_VI),
+        events_in_size: reg(host_stubs::events_in_size_index(), host_stubs::SIG_II),
+        events_in_get: reg(host_stubs::events_in_get_index(), host_stubs::SIG_III),
+        events_out_try_push: reg(host_stubs::events_out_try_push_index(), host_stubs::SIG_III),
     }
 }
 
@@ -407,7 +415,9 @@ pub extern "C" fn createPlugin(hosted_handle: u32, plugin_id_bytes: u32) -> u32 
             id,
             Plugin {
                 instance_handle: walk.inst,
+                hosted_handle,
                 plugin_ptr,
+                process_ptr: 0,
             },
         );
         host::get(hosted_handle).plugins.push(id);
@@ -417,6 +427,465 @@ pub extern "C" fn createPlugin(hosted_handle: u32, plugin_id_bytes: u32) -> u32 
     {
         let _ = (hosted_handle, plugin_id_bytes);
         0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// pluginStart / pluginProcess / pluginMainThread (M1 doc steps 6, 7)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+unsafe fn setup_ports(
+    inst: u32,
+    plugin_ptr: u32,
+    audio_ports_ptr: u32,
+    info_ptr: u32,
+    is_input: u32,
+    n_ports: u32,
+    audio_buffer_array_base: u32,
+    max_frames: u32,
+) -> Vec<Vec<u32>> {
+    // Returns one inner Vec per port: the per-channel buffer pointers (in
+    // plugin memory). These are what JS will wrap in Float32Array views.
+    let mut port_channels = Vec::with_capacity(n_ports as usize);
+    for i in 0..n_ports {
+        // `audio_ports.get(plugin, index, is_input, info_struct)` fills info.
+        let mut args4 = [0u8; SLOT_SIZE * 4];
+        write_arg_u32((&mut args4[0..SLOT_SIZE]).try_into().unwrap(), plugin_ptr);
+        write_arg_u32((&mut args4[SLOT_SIZE..2 * SLOT_SIZE]).try_into().unwrap(), i);
+        write_arg_u32(
+            (&mut args4[2 * SLOT_SIZE..3 * SLOT_SIZE]).try_into().unwrap(),
+            is_input,
+        );
+        write_arg_u32(
+            (&mut args4[3 * SLOT_SIZE..4 * SLOT_SIZE]).try_into().unwrap(),
+            info_ptr,
+        );
+        let mut result = [0u8; SLOT_SIZE];
+        call32(
+            inst,
+            audio_ports_ptr + clap::audio_ports::GET as u32,
+            1,
+            result.as_mut_ptr(),
+            args4.as_ptr(),
+            4,
+        );
+
+        // Read channel_count from the filled info struct.
+        let mut cc_buf = [0u8; 4];
+        memcpyFromOther32(
+            inst,
+            cc_buf.as_mut_ptr(),
+            info_ptr + clap::audio_port_info::CHANNEL_COUNT as u32,
+            4,
+        );
+        let channel_count = u32::from_le_bytes(cc_buf);
+
+        // Allocate the per-channel buffer pointer array + each f32 buffer.
+        let channel_array = if channel_count > 0 {
+            malloc32(inst, channel_count * 4)
+        } else {
+            0
+        };
+        let mut channel_ptrs = Vec::with_capacity(channel_count as usize);
+        for _ in 0..channel_count {
+            let buf = malloc32(inst, max_frames * 4);
+            channel_ptrs.push(buf);
+        }
+
+        // Write the channel-pointer array into plugin memory.
+        if channel_count > 0 {
+            let mut ca_bytes: Vec<u8> = Vec::with_capacity(channel_count as usize * 4);
+            for &cp in &channel_ptrs {
+                ca_bytes.extend_from_slice(&cp.to_le_bytes());
+            }
+            memcpyToOther32(
+                inst,
+                channel_array,
+                ca_bytes.as_ptr(),
+                ca_bytes.len() as u32,
+            );
+        }
+
+        // Build the audio_buffer struct (24 bytes) and copy it into the
+        // host's allocation at `audio_buffer_array_base + i * SIZE`.
+        let mut ab = [0u8; clap::audio_buffer::SIZE];
+        ab[clap::audio_buffer::DATA32..clap::audio_buffer::DATA32 + 4]
+            .copy_from_slice(&channel_array.to_le_bytes());
+        // DATA64 stays 0 (we don't host wasm64 plugins).
+        ab[clap::audio_buffer::CHANNEL_COUNT..clap::audio_buffer::CHANNEL_COUNT + 4]
+            .copy_from_slice(&channel_count.to_le_bytes());
+        // LATENCY = 0, CONSTANT_MASK = 0 — pre-zeroed by the array init.
+        let ab_dest = audio_buffer_array_base + clap::audio_buffer::SIZE as u32 * i;
+        memcpyToOther32(inst, ab_dest, ab.as_ptr(), ab.len() as u32);
+
+        port_channels.push(channel_ptrs);
+    }
+    port_channels
+}
+
+#[cfg(target_arch = "wasm32")]
+unsafe fn cbor_port_list(out: &mut Vec<u8>, ports: &[Vec<u32>]) {
+    // [[ptrL, ptrR], ...]
+    cbor_array_header(out, ports.len() as u64);
+    for channels in ports {
+        cbor_array_header(out, channels.len() as u64);
+        for &ptr in channels {
+            // CBOR major 0 (unsigned int) — u32 fits in 4-byte BE form.
+            cbor_uint_header(out, 0x00, ptr as u64);
+        }
+    }
+}
+
+/// `pluginStart(pluginHandle, sampleRate, minFrames, maxFrames, bytesHandle)`
+///
+/// Allocates audio buffers + `clap_audio_buffer` structs + `clap_process` in
+/// plugin memory, queries the `clap.audio-ports` extension, calls
+/// `clap_plugin.activate` then `start_processing`, and publishes the
+/// per-port channel pointer map back to JS as CBOR:
+///   `{ inputs: [[ptrL, ptrR], ...], outputs: [[ptrL, ptrR], ...] }`
+/// Returns the host-memory pointer of the bytes-pool buffer.
+#[no_mangle]
+pub extern "C" fn pluginStart(
+    plugin_handle: u32,
+    sample_rate: f64,
+    min_frames: u32,
+    max_frames: u32,
+    bytes_handle: u32,
+) -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        let (inst, plugin_ptr, hosted_handle) = {
+            let p = get(plugin_handle);
+            (p.instance_handle, p.plugin_ptr, p.hosted_handle)
+        };
+        let stubs = host::get(hosted_handle)
+            .stubs
+            .expect("host stubs must be registered by ensure_factory");
+
+        // 1. plugin.get_extension(plugin, "clap.audio-ports") → audio_ports*
+        let ext_id_ptr = alloc_cstr(inst, b"clap.audio-ports");
+        let mut args2 = [0u8; SLOT_SIZE * 2];
+        write_arg_u32((&mut args2[0..SLOT_SIZE]).try_into().unwrap(), plugin_ptr);
+        write_arg_u32((&mut args2[SLOT_SIZE..]).try_into().unwrap(), ext_id_ptr);
+        let mut result = [0u8; SLOT_SIZE];
+        call32(
+            inst,
+            plugin_ptr + clap::plugin::GET_EXTENSION as u32,
+            1,
+            result.as_mut_ptr(),
+            args2.as_ptr(),
+            2,
+        );
+        let audio_ports_ptr = read_result_u32(&result);
+
+        // 2. audio_ports.count(plugin, is_input) for each direction.
+        let count = |is_input: u32| -> u32 {
+            if audio_ports_ptr == 0 {
+                return 0;
+            }
+            let mut a2 = [0u8; SLOT_SIZE * 2];
+            write_arg_u32((&mut a2[0..SLOT_SIZE]).try_into().unwrap(), plugin_ptr);
+            write_arg_u32((&mut a2[SLOT_SIZE..]).try_into().unwrap(), is_input);
+            let mut r = [0u8; SLOT_SIZE];
+            call32(
+                inst,
+                audio_ports_ptr + clap::audio_ports::COUNT as u32,
+                1,
+                r.as_mut_ptr(),
+                a2.as_ptr(),
+                2,
+            );
+            read_result_u32(&r)
+        };
+        let n_in = count(1);
+        let n_out = count(0);
+
+        // 3. Allocate audio_buffer arrays + info scratch.
+        let info_ptr = malloc32(inst, clap::audio_port_info::SIZE as u32);
+        let audio_inputs = if n_in > 0 {
+            malloc32(inst, clap::audio_buffer::SIZE as u32 * n_in)
+        } else {
+            0
+        };
+        let audio_outputs = if n_out > 0 {
+            malloc32(inst, clap::audio_buffer::SIZE as u32 * n_out)
+        } else {
+            0
+        };
+        let in_ptrs = if n_in > 0 && audio_ports_ptr != 0 {
+            setup_ports(
+                inst,
+                plugin_ptr,
+                audio_ports_ptr,
+                info_ptr,
+                1,
+                n_in,
+                audio_inputs,
+                max_frames,
+            )
+        } else {
+            Vec::new()
+        };
+        let out_ptrs = if n_out > 0 && audio_ports_ptr != 0 {
+            setup_ports(
+                inst,
+                plugin_ptr,
+                audio_ports_ptr,
+                info_ptr,
+                0,
+                n_out,
+                audio_outputs,
+                max_frames,
+            )
+        } else {
+            Vec::new()
+        };
+
+        // 4. Build empty in_events / out_events lists in plugin memory.
+        let in_events_ptr = malloc32(inst, clap::input_events::SIZE as u32);
+        {
+            let mut ev = [0u8; clap::input_events::SIZE];
+            ev[clap::input_events::SIZE_FN..clap::input_events::SIZE_FN + 4]
+                .copy_from_slice(&stubs.events_in_size.to_le_bytes());
+            ev[clap::input_events::GET..clap::input_events::GET + 4]
+                .copy_from_slice(&stubs.events_in_get.to_le_bytes());
+            memcpyToOther32(inst, in_events_ptr, ev.as_ptr(), ev.len() as u32);
+        }
+        let out_events_ptr = malloc32(inst, clap::output_events::SIZE as u32);
+        {
+            let mut ev = [0u8; clap::output_events::SIZE];
+            ev[clap::output_events::TRY_PUSH..clap::output_events::TRY_PUSH + 4]
+                .copy_from_slice(&stubs.events_out_try_push.to_le_bytes());
+            memcpyToOther32(inst, out_events_ptr, ev.as_ptr(), ev.len() as u32);
+        }
+
+        // 5. Build clap_process struct.
+        let process_ptr = malloc32(inst, clap::process::SIZE as u32);
+        {
+            let mut proc = [0u8; clap::process::SIZE];
+            // steady_time = -1 (CLAP convention: unset)
+            proc[clap::process::STEADY_TIME..clap::process::STEADY_TIME + 8]
+                .copy_from_slice(&(-1i64).to_le_bytes());
+            // frames_count set per-block by pluginProcess.
+            // transport = 0 (no transport at M1)
+            proc[clap::process::AUDIO_INPUTS..clap::process::AUDIO_INPUTS + 4]
+                .copy_from_slice(&audio_inputs.to_le_bytes());
+            proc[clap::process::AUDIO_OUTPUTS..clap::process::AUDIO_OUTPUTS + 4]
+                .copy_from_slice(&audio_outputs.to_le_bytes());
+            proc[clap::process::AUDIO_INPUTS_COUNT..clap::process::AUDIO_INPUTS_COUNT + 4]
+                .copy_from_slice(&n_in.to_le_bytes());
+            proc[clap::process::AUDIO_OUTPUTS_COUNT..clap::process::AUDIO_OUTPUTS_COUNT + 4]
+                .copy_from_slice(&n_out.to_le_bytes());
+            proc[clap::process::IN_EVENTS..clap::process::IN_EVENTS + 4]
+                .copy_from_slice(&in_events_ptr.to_le_bytes());
+            proc[clap::process::OUT_EVENTS..clap::process::OUT_EVENTS + 4]
+                .copy_from_slice(&out_events_ptr.to_le_bytes());
+            memcpyToOther32(inst, process_ptr, proc.as_ptr(), proc.len() as u32);
+        }
+        get(plugin_handle).process_ptr = process_ptr;
+
+        // 6. plugin.activate(plugin, sample_rate, min_frames, max_frames).
+        let mut args4 = [0u8; SLOT_SIZE * 4];
+        write_arg_u32((&mut args4[0..SLOT_SIZE]).try_into().unwrap(), plugin_ptr);
+        write_arg_f64(
+            (&mut args4[SLOT_SIZE..2 * SLOT_SIZE]).try_into().unwrap(),
+            sample_rate,
+        );
+        write_arg_u32(
+            (&mut args4[2 * SLOT_SIZE..3 * SLOT_SIZE]).try_into().unwrap(),
+            min_frames,
+        );
+        write_arg_u32(
+            (&mut args4[3 * SLOT_SIZE..4 * SLOT_SIZE]).try_into().unwrap(),
+            max_frames,
+        );
+        call32(
+            inst,
+            plugin_ptr + clap::plugin::ACTIVATE as u32,
+            1,
+            result.as_mut_ptr(),
+            args4.as_ptr(),
+            4,
+        );
+        if read_result_u32(&result) == 0 {
+            return crate::bytes::set(bytes_handle, &[]);
+        }
+
+        // 7. plugin.start_processing(plugin).
+        let mut arg1 = [0u8; SLOT_SIZE];
+        write_arg_u32(&mut arg1, plugin_ptr);
+        call32(
+            inst,
+            plugin_ptr + clap::plugin::START_PROCESSING as u32,
+            1,
+            result.as_mut_ptr(),
+            arg1.as_ptr(),
+            1,
+        );
+        // ignore start_processing return for now; some plugins return true,
+        // some void-via-bool. If false, the worklet will hear silence rather
+        // than crashing.
+
+        // 8. CBOR-encode the channel-pointer map.
+        let mut cbor = Vec::with_capacity(128);
+        cbor_map_header(&mut cbor, 2);
+        cbor_text(&mut cbor, b"inputs");
+        cbor_port_list(&mut cbor, &in_ptrs);
+        cbor_text(&mut cbor, b"outputs");
+        cbor_port_list(&mut cbor, &out_ptrs);
+        crate::bytes::set(bytes_handle, &cbor)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (plugin_handle, sample_rate, min_frames, max_frames, bytes_handle);
+        0
+    }
+}
+
+/// `pluginProcess(pluginHandle, framesCount) -> process_status`
+///
+/// Per-block: stamp `framesCount` into the `clap_process` struct (other
+/// fields are stable from `pluginStart`), call `clap_plugin.process`,
+/// return the plugin's status int unchanged.
+#[no_mangle]
+pub extern "C" fn pluginProcess(plugin_handle: u32, frames_count: u32) -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        let (inst, plugin_ptr, process_ptr) = {
+            let p = get(plugin_handle);
+            (p.instance_handle, p.plugin_ptr, p.process_ptr)
+        };
+        if process_ptr == 0 {
+            return 0; // not started yet
+        }
+
+        // Patch frames_count.
+        let fc = frames_count.to_le_bytes();
+        memcpyToOther32(
+            inst,
+            process_ptr + clap::process::FRAMES_COUNT as u32,
+            fc.as_ptr(),
+            4,
+        );
+
+        // plugin.process(plugin, &process)
+        let mut args2 = [0u8; SLOT_SIZE * 2];
+        write_arg_u32((&mut args2[0..SLOT_SIZE]).try_into().unwrap(), plugin_ptr);
+        write_arg_u32(
+            (&mut args2[SLOT_SIZE..]).try_into().unwrap(),
+            process_ptr,
+        );
+        let mut result = [0u8; SLOT_SIZE];
+        call32(
+            inst,
+            plugin_ptr + clap::plugin::PROCESS as u32,
+            1,
+            result.as_mut_ptr(),
+            args2.as_ptr(),
+            2,
+        );
+        read_result_u32(&result)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (plugin_handle, frames_count);
+        0
+    }
+}
+
+/// `pluginGetInfo(pluginHandle, bytesHandle) -> u32`
+///
+/// Per-plugin descriptor metadata. The AWP forwards the decoded result to
+/// the main thread, which destructures `{desc, webview, methods}`. Page
+/// code only reads `desc.name` and `desc.vendor`; everything else gets a
+/// CBOR-null placeholder for now.
+#[no_mangle]
+pub extern "C" fn pluginGetInfo(plugin_handle: u32, bytes_handle: u32) -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        let (inst, plugin_ptr) = {
+            let p = get(plugin_handle);
+            (p.instance_handle, p.plugin_ptr)
+        };
+
+        // wclap_plugin.desc (offset 0) is a pointer-to-descriptor in plugin memory.
+        let mut desc_p_bytes = [0u8; 4];
+        memcpyFromOther32(
+            inst,
+            desc_p_bytes.as_mut_ptr(),
+            plugin_ptr + clap::plugin::DESC as u32,
+            4,
+        );
+        let desc_ptr = u32::from_le_bytes(desc_p_bytes);
+
+        let read_descriptor_str = |field_offset: usize| -> Vec<u8> {
+            if desc_ptr == 0 {
+                return Vec::new();
+            }
+            let mut p_bytes = [0u8; 4];
+            memcpyFromOther32(
+                inst,
+                p_bytes.as_mut_ptr(),
+                desc_ptr + field_offset as u32,
+                4,
+            );
+            let str_ptr = u32::from_le_bytes(p_bytes);
+            read_cstr(inst, str_ptr, 256)
+        };
+        let id = read_descriptor_str(clap::descriptor::ID);
+        let name = read_descriptor_str(clap::descriptor::NAME);
+        let vendor = read_descriptor_str(clap::descriptor::VENDOR);
+
+        // CBOR: {desc: {id, name, vendor}, webview: null}
+        let mut cbor = Vec::with_capacity(128);
+        cbor_map_header(&mut cbor, 2);
+        cbor_text(&mut cbor, b"desc");
+        cbor_map_header(&mut cbor, 3);
+        cbor_text(&mut cbor, b"id");
+        cbor_text(&mut cbor, &id);
+        cbor_text(&mut cbor, b"name");
+        cbor_text(&mut cbor, &name);
+        cbor_text(&mut cbor, b"vendor");
+        cbor_text(&mut cbor, &vendor);
+        cbor_text(&mut cbor, b"webview");
+        cbor.push(0xf6); // CBOR null
+
+        crate::bytes::set(bytes_handle, &cbor)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (plugin_handle, bytes_handle);
+        0
+    }
+}
+
+/// `pluginMainThread(pluginHandle)` — called from the AWP for single-threaded
+/// plugins after each `process` call (see `clap-audioworkletprocessor.mjs`
+/// line 209). Calls `clap_plugin.on_main_thread`.
+#[no_mangle]
+pub extern "C" fn pluginMainThread(plugin_handle: u32) {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        let (inst, plugin_ptr) = {
+            let p = get(plugin_handle);
+            (p.instance_handle, p.plugin_ptr)
+        };
+        let mut arg = [0u8; SLOT_SIZE];
+        write_arg_u32(&mut arg, plugin_ptr);
+        let mut result = [0u8; SLOT_SIZE];
+        call32(
+            inst,
+            plugin_ptr + clap::plugin::ON_MAIN_THREAD as u32,
+            1,
+            result.as_mut_ptr(),
+            arg.as_ptr(),
+            1,
+        );
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = plugin_handle;
     }
 }
 

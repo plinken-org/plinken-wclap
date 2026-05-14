@@ -81,6 +81,74 @@ pub mod host {
 
 pub const FACTORY_ID: &[u8] = b"clap.plugin-factory\0";
 
+pub const EXT_AUDIO_PORTS: &[u8] = b"clap.audio-ports\0";
+
+pub mod audio_ports {
+    //! `wclap_plugin_audio_ports` — extension returned by
+    //! `plugin.get_extension(plugin, "clap.audio-ports")`.
+    pub const COUNT: usize = 0; // Function<u32, plugin*, bool is_input>
+    pub const GET: usize = 4; // Function<bool, plugin*, u32 index, bool is_input, audio_port_info*>
+    pub const SIZE: usize = 8;
+}
+
+pub mod audio_port_info {
+    //! `wclap_audio_port_info` — filled by `audio_ports.get`.
+    pub const ID: usize = 0;
+    pub const NAME: usize = 4; // char[256]
+    pub const FLAGS: usize = 260;
+    pub const CHANNEL_COUNT: usize = 264;
+    pub const PORT_TYPE: usize = 268; // Pointer<const char>
+    pub const IN_PLACE_PAIR: usize = 272;
+    pub const SIZE: usize = 276;
+}
+
+pub mod audio_buffer {
+    //! `wclap_audio_buffer` — one per port. M1 host writes only `data32`
+    //! and `channel_count`; `data64` is 0 (we host wasm32 plugins only),
+    //! `latency` is 0, `constant_mask` is 0.
+    pub const DATA32: usize = 0; // Pointer<Pointer<f32>>
+    pub const DATA64: usize = 4; // Pointer<Pointer<f64>>
+    pub const CHANNEL_COUNT: usize = 8;
+    pub const LATENCY: usize = 12;
+    pub const CONSTANT_MASK: usize = 16; // u64
+    pub const SIZE: usize = 24;
+}
+
+pub mod process {
+    //! `wclap_process` — passed once into `clap_plugin.process`. M1 host
+    //! reuses the same struct every block, mutating only `frames_count`.
+    //! Events come in/out via empty `clap_input_events` / `clap_output_events`
+    //! stubs that are no-ops at M1.
+    pub const STEADY_TIME: usize = 0; // i64
+    pub const FRAMES_COUNT: usize = 8;
+    pub const TRANSPORT: usize = 12; // Pointer<const event_transport>
+    pub const AUDIO_INPUTS: usize = 16;
+    pub const AUDIO_OUTPUTS: usize = 20;
+    pub const AUDIO_INPUTS_COUNT: usize = 24;
+    pub const AUDIO_OUTPUTS_COUNT: usize = 28;
+    pub const IN_EVENTS: usize = 32;
+    pub const OUT_EVENTS: usize = 36;
+    pub const SIZE: usize = 40;
+}
+
+pub mod input_events {
+    //! `wclap_input_events` — host-supplied event source the plugin polls
+    //! during `process`. M1 emits an empty stream: `size` returns 0,
+    //! `get` is never called.
+    pub const CTX: usize = 0; // Pointer<void>
+    pub const SIZE_FN: usize = 4; // Function<u32, list*>
+    pub const GET: usize = 8; // Function<event*, list*, u32 index>
+    pub const SIZE: usize = 12;
+}
+
+pub mod output_events {
+    //! `wclap_output_events` — host-supplied sink. M1 drops everything
+    //! the plugin tries to push (`try_push` returns false).
+    pub const CTX: usize = 0;
+    pub const TRY_PUSH: usize = 4; // Function<bool, list*, event*>
+    pub const SIZE: usize = 8;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,6 +161,12 @@ mod tests {
         assert_eq!(factory::SIZE, 12);
         assert_eq!(host::SIZE, 48);
         assert_eq!(VERSION_SIZE, 12);
+        assert_eq!(audio_ports::SIZE, 8);
+        assert_eq!(audio_port_info::SIZE, 276);
+        assert_eq!(audio_buffer::SIZE, 24);
+        assert_eq!(process::SIZE, 40);
+        assert_eq!(input_events::SIZE, 12);
+        assert_eq!(output_events::SIZE, 8);
     }
 
     #[test]

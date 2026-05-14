@@ -21,10 +21,15 @@ pub(crate) struct Hosted {
 
 #[derive(Copy, Clone)]
 pub(crate) struct HostStubIndices {
+    // clap_host_t callbacks
     pub(crate) get_extension: u32,
     pub(crate) request_restart: u32,
     pub(crate) request_process: u32,
     pub(crate) request_callback: u32,
+    // clap_input_events / clap_output_events callbacks (used by pluginStart)
+    pub(crate) events_in_size: u32,
+    pub(crate) events_in_get: u32,
+    pub(crate) events_out_try_push: u32,
 }
 
 pub(crate) struct HostedPool {
