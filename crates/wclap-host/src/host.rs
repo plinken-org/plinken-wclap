@@ -10,6 +10,13 @@ pub(crate) struct Hosted {
     pub(crate) instance_handle: u32,
     pub(crate) plugins: Vec<u32>,
     pub(crate) stubs: Option<HostStubIndices>,
+    /// `clap_entry *` cache. `init32` is one-shot (JS asserts
+    /// "WCLAP initialised twice"), so the first caller into the factory
+    /// walk — `getInfo` or `createPlugin` — owns the call and caches the
+    /// result for the other.
+    pub(crate) entry_ptr: Option<u32>,
+    /// `clap_plugin_factory *` cache, populated alongside `entry_ptr`.
+    pub(crate) factory_ptr: Option<u32>,
 }
 
 #[derive(Copy, Clone)]
@@ -50,9 +57,19 @@ pub extern "C" fn makeHosted(wclap_instance_ptr: u32) -> u32 {
             instance_handle: wclap_instance_ptr,
             plugins: Vec::new(),
             stubs: None,
+            entry_ptr: None,
+            factory_ptr: None,
         },
     );
     id
+}
+
+/// Called when the page is done enumerating a wclap module (see `plugins()`
+/// in `clap-audionode.mjs`). M1 just drops the bookkeeping; nothing to call
+/// into the plugin — its memory and instance live on inside `wclap-host-js`.
+#[no_mangle]
+pub extern "C" fn removeHosted(handle: u32) {
+    pool().map.remove(&handle);
 }
 
 #[cfg(test)]

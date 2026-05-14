@@ -54,6 +54,16 @@ pub(crate) fn view(handle: u32) -> &'static [u8] {
     pool().map.get(&handle).expect("bad bytes handle").as_slice()
 }
 
+/// Replace a bytes-pool buffer's contents and return its (possibly new)
+/// host-memory pointer. Used by `getInfo` to publish CBOR back to JS — the
+/// page reads it through `getBytesData(handle)` / `getBytesLength(handle)`.
+pub(crate) fn set(handle: u32, data: &[u8]) -> u32 {
+    let buf = pool().map.get_mut(&handle).expect("bad bytes handle");
+    buf.clear();
+    buf.extend_from_slice(data);
+    buf.as_mut_ptr() as u32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
