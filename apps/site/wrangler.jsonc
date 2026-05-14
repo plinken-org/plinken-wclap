@@ -13,11 +13,9 @@
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
-  }
-  // Custom domains — uncomment once plinken.org is added as a zone on this CF account
-  // (Cloudflare dashboard → Websites → Add a site → plinken.org, point nameservers to CF):
-  //   "routes": [
-  //     { "pattern": "plinken.org", "custom_domain": true },
-  //     { "pattern": "www.plinken.org", "custom_domain": true }
-  //   ]
+  },
+  "routes": [
+    { "pattern": "plinken.org", "custom_domain": true },
+    { "pattern": "www.plinken.org", "custom_domain": true }
+  ]
 }
