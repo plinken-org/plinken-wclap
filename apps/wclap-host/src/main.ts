@@ -1,3 +1,7 @@
+// Cap WebAssembly.Memory maxima before any wasm code runs (upstream getWclap
+// otherwise reserves 2 GB of shared virtual memory per plugin load).
+import './wclap-runtime/cap-wasm-memory';
+
 import ClapAudioNode, {
   type ClapEffectAudioNode
 } from './wclap-runtime/clap-audionode.mjs';
@@ -8,6 +12,7 @@ import workletUrl from './wclap-runtime/clap-audioworkletprocessor.mjs?worker&ur
 import {
   clearError,
   getElements,
+  setAudioState,
   setCoi,
   setMeters,
   setPlugin,
@@ -21,8 +26,7 @@ interface RunningGraph {
   ctx: AudioContext;
   oscL: OscillatorNode;
   oscR: OscillatorNode;
-  merger: ChannelMergerNode;
-  effect: ClapEffectAudioNode;
+  effect: ClapEffectAudioNode | null;
   analyserL: AnalyserNode;
   analyserR: AnalyserNode;
   meterTimer: number;
@@ -32,9 +36,15 @@ interface RunningGraph {
 const ui = getElements();
 
 setCoi(ui, globalThis.crossOriginIsolated === true);
-setStatus(ui, 'Idle — waiting for a plugin.');
+setAudioState(ui, 'idle (no context)');
+setStatus(ui, 'Press Play for a 440 Hz test tone, or drop a .wclap to chain a plugin.');
+setPlugin(ui, '(no plugin — direct test tone)');
 
 let current: RunningGraph | null = null;
+
+// Enable Play right away. The graph is built on first click — inside the
+// user gesture, which keeps the autoplay policy happy on every browser.
+ui.playBtn.disabled = false;
 
 wireDropZone(ui, (file) => {
   void loadPlugin(file);
@@ -65,13 +75,26 @@ async function loadSample(): Promise<void> {
 }
 
 ui.playBtn.addEventListener('click', () => {
-  if (!current) return;
-  void current.ctx.resume().then(() => {
-    setStatus(ui, 'Playing — test tone routed through plugin.');
-    ui.playBtn.disabled = true;
-    ui.stopBtn.disabled = false;
-  });
+  void onPlay();
 });
+
+async function onPlay(): Promise<void> {
+  ui.playBtn.disabled = true;
+  try {
+    if (!current) {
+      await loadRawTestTone();
+    }
+    if (!current) return;
+    const label = current.effect ? 'plugin' : 'no plugin';
+    await current.ctx.resume();
+    setStatus(ui, `Playing — 440 Hz test tone (${label}).`);
+    ui.stopBtn.disabled = false;
+  } catch (err) {
+    showError(ui, err);
+    setStatus(ui, 'Failed to start audio. See error below.');
+    ui.playBtn.disabled = false;
+  }
+}
 
 ui.stopBtn.addEventListener('click', () => {
   if (!current) return;
@@ -136,6 +159,7 @@ async function loadPlugin(file: File): Promise<void> {
 
     const ctx = new AudioContext();
     setSampleRate(ui, ctx.sampleRate);
+    wireAudioState(ctx);
 
     setStatus(ui, 'Starting AudioWorklet…');
     // Pre-register the worklet processor with the Vite-bundled URL. The
@@ -153,61 +177,7 @@ async function loadPlugin(file: File): Promise<void> {
     if (descriptor.vendor) labelParts.push(`(${descriptor.vendor})`);
     setPlugin(ui, labelParts.join(' '));
 
-    // Stereo 440 Hz test tone → ChannelMerger → effect → destination.
-    // We use two oscillators so the worklet sees two distinct input channels;
-    // a single OscillatorNode merged into stereo is still mono-correlated, but
-    // for this PoC that's fine.
-    const oscL = ctx.createOscillator();
-    const oscR = ctx.createOscillator();
-    oscL.frequency.value = 440;
-    oscR.frequency.value = 440;
-    oscL.type = 'sine';
-    oscR.type = 'sine';
-
-    const merger = ctx.createChannelMerger(2);
-    oscL.connect(merger, 0, 0);
-    oscR.connect(merger, 0, 1);
-
-    // Attenuate the input so plugins with internal gain don't blow eardrums.
-    const inGain = ctx.createGain();
-    inGain.gain.value = 0.25;
-    merger.connect(inGain);
-    inGain.connect(effect);
-
-    // Tap the effect output into two analysers (split L/R) for RMS metering,
-    // then send the same signal to the speakers.
-    const splitter = ctx.createChannelSplitter(2);
-    const analyserL = ctx.createAnalyser();
-    const analyserR = ctx.createAnalyser();
-    analyserL.fftSize = 1024;
-    analyserR.fftSize = 1024;
-    effect.connect(splitter);
-    splitter.connect(analyserL, 0);
-    splitter.connect(analyserR, 1);
-    effect.connect(ctx.destination);
-
-    oscL.start();
-    oscR.start();
-
-    // Suspend so playback only starts when the user presses Play. AudioContext
-    // also requires a user gesture before it can run; this matches that gate.
-    await ctx.suspend();
-
-    const meterTimer = window.setInterval(() => {
-      setMeters(ui, rms(analyserL), rms(analyserR));
-    }, 50);
-
-    current = {
-      ctx,
-      oscL,
-      oscR,
-      merger,
-      effect,
-      analyserL,
-      analyserR,
-      meterTimer,
-      blobUrl
-    };
+    await buildToneGraph(ctx, effect, blobUrl);
 
     setStatus(ui, 'Ready — press Play to hear the test tone.');
     ui.playBtn.disabled = false;
@@ -219,6 +189,113 @@ async function loadPlugin(file: File): Promise<void> {
   }
 }
 
+async function loadRawTestTone(): Promise<void> {
+  clearError(ui);
+  setPlugin(ui, '(no plugin — direct test tone)');
+  await teardown();
+  const ctx = new AudioContext();
+  setSampleRate(ui, ctx.sampleRate);
+  wireAudioState(ctx);
+  await buildToneGraph(ctx, null, null);
+}
+
+function wireAudioState(ctx: AudioContext): void {
+  const maxCh = ctx.destination.maxChannelCount;
+  const baseLatencyMs = (ctx.baseLatency ?? 0) * 1000;
+  const extra = `out=${maxCh}ch · base latency≈${baseLatencyMs.toFixed(1)}ms`;
+  setAudioState(ui, ctx.state, extra);
+  ctx.onstatechange = (): void => {
+    setAudioState(ui, ctx.state, extra);
+  };
+}
+
+// Build the test-tone audio graph and assign it to `current`. With an
+// `effect`, the chain is `osc → merger → inGain → effect → (analysers,
+// destination)`. Without one, `inGain` feeds the analysers and destination
+// directly — useful for confirming audio routing without involving a plugin.
+async function buildToneGraph(
+  ctx: AudioContext,
+  effect: ClapEffectAudioNode | null,
+  blobUrl: string | null
+): Promise<void> {
+  // Stereo 440 Hz test tone. Two oscillators so the worklet sees two distinct
+  // input channels; mono-correlated is fine for the PoC.
+  const oscL = ctx.createOscillator();
+  const oscR = ctx.createOscillator();
+  oscL.frequency.value = 440;
+  oscR.frequency.value = 440;
+  oscL.type = 'sine';
+  oscR.type = 'sine';
+
+  const merger = ctx.createChannelMerger(2);
+  oscL.connect(merger, 0, 0);
+  oscR.connect(merger, 0, 1);
+
+  // Plugin path attenuates so plugins with internal gain don't blow eardrums.
+  // The raw path runs at a clearly audible level so a silent-speaker situation
+  // is unambiguous.
+  const inGain = ctx.createGain();
+  inGain.gain.value = effect ? 0.25 : 0.7;
+  merger.connect(inGain);
+
+  const splitter = ctx.createChannelSplitter(2);
+  const analyserL = ctx.createAnalyser();
+  const analyserR = ctx.createAnalyser();
+  analyserL.fftSize = 1024;
+  analyserR.fftSize = 1024;
+
+  // The node that feeds both the splitter (meters) and the destination
+  // (speakers). When a plugin is loaded, that's the effect output; otherwise
+  // it's the input gain — the same 440 Hz tone going straight through.
+  let monitorSource: AudioNode;
+  if (effect) {
+    inGain.connect(effect);
+    monitorSource = effect;
+  } else {
+    monitorSource = inGain;
+  }
+  monitorSource.connect(splitter);
+  splitter.connect(analyserL, 0);
+  splitter.connect(analyserR, 1);
+  monitorSource.connect(ctx.destination);
+
+  oscL.start();
+  oscR.start();
+
+  // Suspend so playback only starts when the user presses Play. AudioContext
+  // also requires a user gesture before it can run; this matches that gate.
+  await ctx.suspend();
+
+  // Peak-meter ballistics: instant attack, ~300 ms exponential release. When
+  // the AudioContext suspends (Stop), targets fall to 0 and the displayed
+  // values decay smoothly instead of freezing at the last frame.
+  const METER_INTERVAL_MS = 50;
+  const METER_RELEASE_MS = 300;
+  const RELEASE_COEFF = Math.exp(-METER_INTERVAL_MS / METER_RELEASE_MS);
+  let displayedL = 0;
+  let displayedR = 0;
+
+  const meterTimer = window.setInterval(() => {
+    const live = ctx.state === 'running';
+    const targetL = live ? rms(analyserL) : 0;
+    const targetR = live ? rms(analyserR) : 0;
+    displayedL = targetL >= displayedL ? targetL : displayedL * RELEASE_COEFF;
+    displayedR = targetR >= displayedR ? targetR : displayedR * RELEASE_COEFF;
+    setMeters(ui, displayedL, displayedR);
+  }, METER_INTERVAL_MS);
+
+  current = {
+    ctx,
+    oscL,
+    oscR,
+    effect,
+    analyserL,
+    analyserR,
+    meterTimer,
+    blobUrl
+  };
+}
+
 async function teardown(): Promise<void> {
   if (!current) return;
   window.clearInterval(current.meterTimer);
@@ -228,10 +305,12 @@ async function teardown(): Promise<void> {
   } catch {
     // Already stopped or never started — ignore.
   }
-  try {
-    current.effect.disconnect();
-  } catch {
-    // Already disconnected — ignore.
+  if (current.effect) {
+    try {
+      current.effect.disconnect();
+    } catch {
+      // Already disconnected — ignore.
+    }
   }
   try {
     await current.ctx.close();
@@ -241,6 +320,7 @@ async function teardown(): Promise<void> {
   if (current.blobUrl) URL.revokeObjectURL(current.blobUrl);
   current = null;
   setMeters(ui, 0, 0);
+  setAudioState(ui, 'idle (no context)');
 }
 
 const rmsScratch = new Float32Array(1024);

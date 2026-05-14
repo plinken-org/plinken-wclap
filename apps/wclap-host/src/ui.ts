@@ -17,6 +17,7 @@ export interface UiElements {
   pluginLabel: HTMLElement;
   sampleRateLabel: HTMLElement;
   coiLabel: HTMLElement;
+  audioStateLabel: HTMLElement;
   playBtn: HTMLButtonElement;
   stopBtn: HTMLButtonElement;
   meterL: HTMLElement;
@@ -33,6 +34,7 @@ export function getElements(): UiElements {
     pluginLabel: el<HTMLElement>('pluginLabel'),
     sampleRateLabel: el<HTMLElement>('sampleRateLabel'),
     coiLabel: el<HTMLElement>('coiLabel'),
+    audioStateLabel: el<HTMLElement>('audioStateLabel'),
     playBtn: el<HTMLButtonElement>('playBtn'),
     stopBtn: el<HTMLButtonElement>('stopBtn'),
     meterL: el<HTMLElement>('meterL'),
@@ -57,6 +59,14 @@ export function setCoi(ui: UiElements, isolated: boolean): void {
   ui.coiLabel.textContent = isolated
     ? 'yes (threads available)'
     : 'no (single-thread fallback)';
+}
+
+export function setAudioState(
+  ui: UiElements,
+  state: string,
+  extra?: string
+): void {
+  ui.audioStateLabel.textContent = extra ? `${state} · ${extra}` : state;
 }
 
 export function showError(ui: UiElements, err: unknown): void {
