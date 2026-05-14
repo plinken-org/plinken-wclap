@@ -45,6 +45,9 @@ pub(crate) struct Plugin {
     /// `clap.webview/3` extension pointer, populated lazily by
     /// `pluginGetInfo`. Zero if the plugin doesn't advertise the extension.
     pub(crate) webview_ext_ptr: u32,
+    /// `clap.params` extension pointer, populated lazily by the first
+    /// param-export call. Zero if the plugin doesn't expose params.
+    pub(crate) params_ext_ptr: u32,
     /// Per-plugin `clap_host_webview` struct in plugin memory. Allocated
     /// by `createPlugin`. `_wclap_host_get_extension` returns this when
     /// the plugin asks for `clap.webview/3`.
@@ -305,6 +308,11 @@ fn cbor_array_header(out: &mut Vec<u8>, n: u64) {
     cbor_uint_header(out, 0x80, n);
 }
 
+fn cbor_f64(out: &mut Vec<u8>, v: f64) {
+    out.push(0xfb); // major 7, additional 27 (8-byte float, big-endian)
+    out.extend_from_slice(&v.to_be_bytes());
+}
+
 // ---------------------------------------------------------------------------
 // JS-facing exports
 // ---------------------------------------------------------------------------
@@ -435,6 +443,7 @@ pub extern "C" fn createPlugin(hosted_handle: u32, plugin_id_bytes: u32) -> u32 
                 plugin_ptr: 0, // patched after factory.create_plugin
                 process_ptr: 0,
                 webview_ext_ptr: 0,
+                params_ext_ptr: 0,
                 host_webview_struct_ptr,
                 event_queue: Vec::new(),
                 current_event_ptrs: Vec::new(),
@@ -1098,6 +1107,319 @@ pub extern "C" fn pluginMessage(plugin_handle: u32, bytes_handle: u32) -> u32 {
     {
         let _ = (plugin_handle, bytes_handle);
         0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// clap.params extension — auto-UI introspection + param-value events
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+unsafe fn ensure_params_ext(plugin_handle: u32) -> u32 {
+    let cached = get(plugin_handle).params_ext_ptr;
+    if cached != 0 {
+        return cached;
+    }
+    let (inst, plugin_ptr) = {
+        let p = get(plugin_handle);
+        (p.instance_handle, p.plugin_ptr)
+    };
+    let ext = plugin_get_extension(inst, plugin_ptr, clap::EXT_PARAMS);
+    get(plugin_handle).params_ext_ptr = ext;
+    ext
+}
+
+/// `pluginGetParams(pluginHandle, bytesHandle) -> u32`
+///
+/// Enumerate every param the plugin exposes through `clap.params` and CBOR-
+/// encode `{params: [{id, name, min, max, default, flags}, ...]}` into the
+/// JS-visible bytes pool. The page renders one fader per entry.
+#[no_mangle]
+pub extern "C" fn pluginGetParams(plugin_handle: u32, bytes_handle: u32) -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        let params_ext = ensure_params_ext(plugin_handle);
+        // AWP's `getParams` does `params.forEach` then `return params`, so
+        // the CBOR doc is a bare array (no `{params: ...}` wrapper).
+        let mut cbor = Vec::with_capacity(256);
+        if params_ext == 0 {
+            cbor_array_header(&mut cbor, 0);
+            return crate::bytes::set(bytes_handle, &cbor);
+        }
+
+        let (inst, plugin_ptr) = {
+            let p = get(plugin_handle);
+            (p.instance_handle, p.plugin_ptr)
+        };
+
+        // params.count(plugin)
+        let mut arg = [0u8; SLOT_SIZE];
+        let mut result = [0u8; SLOT_SIZE];
+        write_arg_u32(&mut arg, plugin_ptr);
+        call32(
+            inst,
+            params_ext + clap::params::COUNT as u32,
+            1,
+            result.as_mut_ptr(),
+            arg.as_ptr(),
+            1,
+        );
+        let count = read_result_u32(&result);
+
+        cbor_array_header(&mut cbor, count as u64);
+
+        // Scratch `clap_param_info` in plugin memory, reused per index.
+        let info_ptr = malloc32(inst, clap::param_info::SIZE as u32);
+        let mut info_buf = alloc::vec![0u8; clap::param_info::SIZE];
+
+        for i in 0..count {
+            // params.get_info(plugin, index, info*)
+            let mut args3 = [0u8; SLOT_SIZE * 3];
+            write_arg_u32((&mut args3[0..SLOT_SIZE]).try_into().unwrap(), plugin_ptr);
+            write_arg_u32((&mut args3[SLOT_SIZE..2 * SLOT_SIZE]).try_into().unwrap(), i);
+            write_arg_u32(
+                (&mut args3[2 * SLOT_SIZE..]).try_into().unwrap(),
+                info_ptr,
+            );
+            call32(
+                inst,
+                params_ext + clap::params::GET_INFO as u32,
+                1,
+                result.as_mut_ptr(),
+                args3.as_ptr(),
+                3,
+            );
+            if read_result_u32(&result) == 0 {
+                cbor_map_header(&mut cbor, 0); // empty placeholder
+                continue;
+            }
+
+            memcpyFromOther32(
+                inst,
+                info_buf.as_mut_ptr(),
+                info_ptr,
+                info_buf.len() as u32,
+            );
+
+            let id = u32::from_le_bytes(info_buf[clap::param_info::ID..][..4].try_into().unwrap());
+            let flags = u32::from_le_bytes(
+                info_buf[clap::param_info::FLAGS..][..4].try_into().unwrap(),
+            );
+            // name is a NUL-terminated char[256] inline.
+            let name_slice = &info_buf
+                [clap::param_info::NAME..clap::param_info::NAME + clap::param_info::NAME_LEN];
+            let name_end = name_slice.iter().position(|&b| b == 0).unwrap_or(name_slice.len());
+            let name = &name_slice[..name_end];
+            let min_value = f64::from_le_bytes(
+                info_buf[clap::param_info::MIN_VALUE..][..8].try_into().unwrap(),
+            );
+            let max_value = f64::from_le_bytes(
+                info_buf[clap::param_info::MAX_VALUE..][..8].try_into().unwrap(),
+            );
+            let default_value = f64::from_le_bytes(
+                info_buf[clap::param_info::DEFAULT_VALUE..][..8].try_into().unwrap(),
+            );
+
+            cbor_map_header(&mut cbor, 6);
+            cbor_text(&mut cbor, b"id");
+            cbor_uint_header(&mut cbor, 0x00, id as u64);
+            cbor_text(&mut cbor, b"name");
+            cbor_text(&mut cbor, name);
+            cbor_text(&mut cbor, b"min");
+            cbor_f64(&mut cbor, min_value);
+            cbor_text(&mut cbor, b"max");
+            cbor_f64(&mut cbor, max_value);
+            cbor_text(&mut cbor, b"default");
+            cbor_f64(&mut cbor, default_value);
+            cbor_text(&mut cbor, b"flags");
+            cbor_uint_header(&mut cbor, 0x00, flags as u64);
+        }
+
+        crate::bytes::set(bytes_handle, &cbor)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (plugin_handle, bytes_handle);
+        0
+    }
+}
+
+/// `pluginGetParam(pluginHandle, paramId, bytesHandle) -> u32`
+///
+/// Reads the plugin's *current* value for one param via `params.get_value`
+/// and CBOR-encodes it as a single double (top-level f64, no wrapper) so
+/// the AWP can `decodeCbor` it directly into a number.
+#[no_mangle]
+pub extern "C" fn pluginGetParam(plugin_handle: u32, param_id: u32, bytes_handle: u32) -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        let params_ext = ensure_params_ext(plugin_handle);
+        if params_ext == 0 {
+            let mut cbor = Vec::with_capacity(9);
+            cbor_f64(&mut cbor, 0.0);
+            return crate::bytes::set(bytes_handle, &cbor);
+        }
+        let (inst, plugin_ptr) = {
+            let p = get(plugin_handle);
+            (p.instance_handle, p.plugin_ptr)
+        };
+
+        // Scratch f64 destination in plugin memory.
+        let out_ptr = malloc32(inst, 8);
+
+        let mut args3 = [0u8; SLOT_SIZE * 3];
+        write_arg_u32((&mut args3[0..SLOT_SIZE]).try_into().unwrap(), plugin_ptr);
+        write_arg_u32(
+            (&mut args3[SLOT_SIZE..2 * SLOT_SIZE]).try_into().unwrap(),
+            param_id,
+        );
+        write_arg_u32((&mut args3[2 * SLOT_SIZE..]).try_into().unwrap(), out_ptr);
+        let mut result = [0u8; SLOT_SIZE];
+        call32(
+            inst,
+            params_ext + clap::params::GET_VALUE as u32,
+            1,
+            result.as_mut_ptr(),
+            args3.as_ptr(),
+            3,
+        );
+
+        let mut value = 0f64;
+        if read_result_u32(&result) != 0 {
+            let mut buf = [0u8; 8];
+            memcpyFromOther32(inst, buf.as_mut_ptr(), out_ptr, 8);
+            value = f64::from_le_bytes(buf);
+        }
+        let mut cbor = Vec::with_capacity(9);
+        cbor_f64(&mut cbor, value);
+        crate::bytes::set(bytes_handle, &cbor)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (plugin_handle, param_id, bytes_handle);
+        0
+    }
+}
+
+/// `pluginSetParam(pluginHandle, paramId, value: f64)`
+///
+/// Queue a `clap_event_param_value` for delivery on the next process block
+/// (or via `pluginParamsFlush`). The plugin reads it from its
+/// `clap_input_events` and applies the new value.
+#[no_mangle]
+pub extern "C" fn pluginSetParam(plugin_handle: u32, param_id: u32, value: f64) {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        let mut event = alloc::vec![0u8; clap::event_param_value::SIZE];
+        // header
+        let size_bytes = (clap::event_param_value::SIZE as u32).to_le_bytes();
+        event[0..4].copy_from_slice(&size_bytes);
+        // time = 0 (apply at block start)
+        // space_id = CLAP_CORE_EVENT_SPACE_ID = 0
+        // type = CLAP_EVENT_PARAM_VALUE = 5
+        event[10..12].copy_from_slice(&clap::EVENT_PARAM_VALUE_TYPE.to_le_bytes());
+        // flags = CLAP_EVENT_IS_LIVE = 1
+        event[12..16].copy_from_slice(&1u32.to_le_bytes());
+        // body
+        event[clap::event_param_value::PARAM_ID..clap::event_param_value::PARAM_ID + 4]
+            .copy_from_slice(&param_id.to_le_bytes());
+        // note_id = -1, port/channel/key = -1 → all-targets
+        event[clap::event_param_value::NOTE_ID..clap::event_param_value::NOTE_ID + 4]
+            .copy_from_slice(&(-1i32).to_le_bytes());
+        event[clap::event_param_value::PORT_INDEX..clap::event_param_value::PORT_INDEX + 2]
+            .copy_from_slice(&(-1i16).to_le_bytes());
+        event[clap::event_param_value::CHANNEL..clap::event_param_value::CHANNEL + 2]
+            .copy_from_slice(&(-1i16).to_le_bytes());
+        event[clap::event_param_value::KEY..clap::event_param_value::KEY + 2]
+            .copy_from_slice(&(-1i16).to_le_bytes());
+        event[clap::event_param_value::VALUE..clap::event_param_value::VALUE + 8]
+            .copy_from_slice(&value.to_le_bytes());
+
+        get(plugin_handle).event_queue.push(event);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (plugin_handle, param_id, value);
+    }
+}
+
+/// `pluginParamsFlush(pluginHandle)`
+///
+/// Drain queued param-value events through `params.flush`. The AWP calls
+/// this immediately after each `setParam` so off-block changes still
+/// reach the plugin even when audio isn't running (or between blocks).
+#[no_mangle]
+pub extern "C" fn pluginParamsFlush(plugin_handle: u32) {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        let params_ext = ensure_params_ext(plugin_handle);
+        if params_ext == 0 {
+            // No params extension — drop the queue silently.
+            get(plugin_handle).event_queue.clear();
+            return;
+        }
+        let (inst, plugin_ptr, process_ptr) = {
+            let p = get(plugin_handle);
+            (p.instance_handle, p.plugin_ptr, p.process_ptr)
+        };
+        if process_ptr == 0 {
+            // pluginStart hasn't run yet, so we have no in/out_events lists.
+            // Stash the events; pluginProcess will deliver them once
+            // activate/start_processing complete.
+            return;
+        }
+
+        // Marshal queued events into plugin memory (same as pluginProcess).
+        let queue = core::mem::take(&mut get(plugin_handle).event_queue);
+        let mut ptrs = Vec::with_capacity(queue.len());
+        for ev in &queue {
+            let p = malloc32(inst, ev.len() as u32);
+            memcpyToOther32(inst, p, ev.as_ptr(), ev.len() as u32);
+            ptrs.push(p);
+        }
+        get(plugin_handle).current_event_ptrs = ptrs;
+
+        // Read in/out event-list pointers from the clap_process struct.
+        let mut in_buf = [0u8; 4];
+        let mut out_buf = [0u8; 4];
+        memcpyFromOther32(
+            inst,
+            in_buf.as_mut_ptr(),
+            process_ptr + clap::process::IN_EVENTS as u32,
+            4,
+        );
+        memcpyFromOther32(
+            inst,
+            out_buf.as_mut_ptr(),
+            process_ptr + clap::process::OUT_EVENTS as u32,
+            4,
+        );
+        let in_events = u32::from_le_bytes(in_buf);
+        let out_events = u32::from_le_bytes(out_buf);
+
+        // params.flush(plugin, in_events, out_events) — void return.
+        let mut args3 = [0u8; SLOT_SIZE * 3];
+        write_arg_u32((&mut args3[0..SLOT_SIZE]).try_into().unwrap(), plugin_ptr);
+        write_arg_u32(
+            (&mut args3[SLOT_SIZE..2 * SLOT_SIZE]).try_into().unwrap(),
+            in_events,
+        );
+        write_arg_u32((&mut args3[2 * SLOT_SIZE..]).try_into().unwrap(), out_events);
+        let mut result = [0u8; SLOT_SIZE];
+        call32(
+            inst,
+            params_ext + clap::params::FLUSH as u32,
+            1,
+            result.as_mut_ptr(),
+            args3.as_ptr(),
+            3,
+        );
+
+        get(plugin_handle).current_event_ptrs.clear();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = plugin_handle;
     }
 }
 

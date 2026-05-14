@@ -401,6 +401,41 @@ h1 {
   border: 0;
 }
 
+.pluginPanelBody--auto {
+  display: block;
+  background: var(--bg-deep);
+  padding: 0.75rem 0.9rem;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+}
+.autoEmpty {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+.autoParam {
+  display: block;
+  margin-bottom: 0.85rem;
+}
+.autoParamHead {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--text);
+  margin-bottom: 0.25rem;
+}
+.autoParamName {
+  letter-spacing: 0.03em;
+}
+.autoParamValue {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.autoParam input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent-purple, #a78bfa);
+}
+
 /* Make the slot's plugin label feel actionable when there's a UI to open. */
 .rackSlot.occupied .slotLabel {
   cursor: pointer;
@@ -492,9 +527,51 @@ h1 {
 }
 .meter {
   display: grid;
-  grid-template-columns: 1.5rem 1fr;
+  grid-template-columns: 1.5rem 1fr auto;
   align-items: center;
   gap: 0.5rem;
+}
+.meter .meterBar {
+  grid-column: 2 / -1;
+}
+.masterVolumeWrap {
+  position: relative;
+  width: 100%;
+}
+.masterVolume {
+  width: 100%;
+  accent-color: var(--accent-purple, #a78bfa);
+  display: block;
+}
+/* 0 dB sits at (0 - -60) / (6 - -60) ≈ 90.9% of the slider's travel.
+   The tiny label hangs below; ::before draws the vertical tick mark. */
+.masterVolumeTick {
+  position: absolute;
+  left: calc(90.9% - 0.4rem);
+  bottom: -0.85rem;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  pointer-events: none;
+  line-height: 1;
+}
+.masterVolumeTick::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  width: 1px;
+  height: 6px;
+  background: var(--text-dim);
+  opacity: 0.55;
+}
+.masterVolumeValue {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  min-width: 4.5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 .meterLabel {
   font-family: var(--font-mono);

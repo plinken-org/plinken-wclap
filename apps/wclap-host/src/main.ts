@@ -90,11 +90,16 @@ function emptySlot(): Slot {
 
 const slots: Slot[] = Array.from({ length: NUM_SLOTS }, emptySlot);
 
+// Master-volume DOM refs — bound by `wireMasterVolume()` during bootstrap.
+let masterVolumeSlider: HTMLInputElement | null = null;
+let masterVolumeValueEl: HTMLElement | null = null;
+
 interface BaseGraph {
   ctx: AudioContext;
   oscL: OscillatorNode;
   oscR: OscillatorNode;
   inGain: GainNode;
+  outGain: GainNode;
   splitter: ChannelSplitterNode;
   analyserL: AnalyserNode;
   analyserR: AnalyserNode;
@@ -121,6 +126,7 @@ ui.stopBtn.addEventListener('click', () => void onStop());
 
 renderRack();
 wirePluginModal();
+wireMasterVolume();
 const proxyReady = registerPluginProxy();
 void loadShelf();
 void setupWebMidi();
@@ -201,6 +207,13 @@ async function ensureBaseGraph(): Promise<BaseGraph> {
   splitter.connect(analyserL, 0);
   splitter.connect(analyserR, 1);
 
+  // Master output fader. Meters tap PRE-fader (`tail → splitter`) so they
+  // show actual plugin output level; this gain stage attenuates only what
+  // reaches the speakers. Default 0.5 ≈ -6 dB — safe loudness on first run.
+  const outGain = ctx.createGain();
+  outGain.gain.value = 0.5;
+  outGain.connect(ctx.destination);
+
   oscL.start();
   oscR.start();
   await ctx.suspend();
@@ -225,14 +238,49 @@ async function ensureBaseGraph(): Promise<BaseGraph> {
     oscL,
     oscR,
     inGain,
+    outGain,
     splitter,
     analyserL,
     analyserR,
     meterTimer
   };
 
+  // Slider was wired at page load (before any audio context existed);
+  // re-apply now so its current dB value lands on the freshly-created node.
+  applyMasterVolume();
   rewire();
   return baseGraph;
+}
+
+// Master output volume — drives the `outGain` node introduced post-meters.
+// Slider value is direct dB (−60..+6). At the floor we mute completely
+// (snap to 0 gain) so dragging all the way down behaves like a mute switch
+// rather than leaving a barely-audible residual. Wired at page load (before
+// any audio context exists) so it's responsive even before first Play; the
+// gain assignment is a no-op until `ensureBaseGraph` populates `baseGraph`.
+// (Bindings declared up top — `wireMasterVolume` is called during bootstrap,
+// before these would otherwise be initialised in lexical order.)
+
+function applyMasterVolume(): void {
+  if (!masterVolumeSlider || !masterVolumeValueEl) return;
+  const db = parseFloat(masterVolumeSlider.value);
+  const min = parseFloat(masterVolumeSlider.min);
+  if (db <= min + 0.05) {
+    if (baseGraph) baseGraph.outGain.gain.value = 0;
+    masterVolumeValueEl.textContent = '−∞ dB';
+    return;
+  }
+  const gain = Math.pow(10, db / 20);
+  if (baseGraph) baseGraph.outGain.gain.value = gain;
+  masterVolumeValueEl.textContent = `${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`;
+}
+
+function wireMasterVolume(): void {
+  masterVolumeSlider = document.getElementById('masterVolume') as HTMLInputElement | null;
+  masterVolumeValueEl = document.getElementById('masterVolumeValue');
+  if (!masterVolumeSlider) return;
+  masterVolumeSlider.addEventListener('input', applyMasterVolume);
+  applyMasterVolume();
 }
 
 async function ensureWorklet(): Promise<void> {
@@ -253,14 +301,15 @@ function wireAudioState(ctx: AudioContext): void {
 }
 
 // Disconnect everything in the active chain and reconnect:
-//   inGain → slot1.effect → slot2.effect → … → (splitter, destination)
-// Plus route CLAP events (MIDI/note) along the same order, so a keyboard
-// plugin upstream can drive a synth plugin downstream. Empty slots are
-// skipped (pass-through). Idempotent — call after any slot add/remove/
-// replace.
+//   inGain → slot1.effect → slot2.effect → … → (splitter, outGain) → destination
+// The meter (`splitter`) and master-volume (`outGain`) tap the chain tail
+// in parallel — meter shows pre-fader peak so plugin output level is
+// visible regardless of monitoring volume; only `outGain` actually reaches
+// the speakers. Empty slots are skipped (pass-through). Idempotent — call
+// after any slot add/remove/replace.
 function rewire(): void {
   if (!baseGraph) return;
-  const { inGain, splitter, ctx } = baseGraph;
+  const { inGain, outGain, splitter } = baseGraph;
 
   try {
     inGain.disconnect();
@@ -298,7 +347,7 @@ function rewire(): void {
     prevEffect = slot.effect;
   }
   tail.connect(splitter);
-  tail.connect(ctx.destination);
+  tail.connect(outGain);
 
   refreshPluginSummary();
 }
@@ -531,6 +580,19 @@ function renderRack(): void {
         void openPluginUi(idx, 'compact');
       });
       slotEl.appendChild(stripBtn);
+    }
+
+    if (occupied) {
+      const autoBtn = document.createElement('button');
+      autoBtn.type = 'button';
+      autoBtn.className = 'slotStrip slotAuto';
+      autoBtn.textContent = 'auto';
+      autoBtn.title = 'Auto-generated fader UI from the plugin’s params';
+      autoBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void toggleAutoUi(idx);
+      });
+      slotEl.appendChild(autoBtn);
     }
 
     if (occupied && slot.plugins.length > 1) {
@@ -892,6 +954,155 @@ function applyPanelSize(panel: HTMLElement, size: PanelSize | null): void {
   const h = Math.min(Math.max(size.height + PANEL_HEADER_PX, PANEL_MIN_H), maxH);
   panel.style.width = `${w}px`;
   panel.style.height = `${h}px`;
+}
+
+// ---------------------------------------------------------------------------
+// Auto-generated fader UI (clap.params)
+// ---------------------------------------------------------------------------
+//
+// Built from `effect.getParams()` — one slider per param. Lives in its own
+// panel (separate Map) so it can coexist with the plugin's own iframe UI.
+
+interface ParamInfo {
+  id: number;
+  name: string;
+  min: number;
+  max: number;
+  default: number;
+  flags: number;
+}
+
+const autoPanels = new Map<number, HTMLElement>();
+
+async function toggleAutoUi(idx: number): Promise<void> {
+  if (autoPanels.has(idx)) {
+    closeAutoUi(idx);
+    return;
+  }
+  const slot = slots[idx];
+  if (!slot || !slot.effect) return;
+  const effect = slot.effect as {
+    getParams?: () => Promise<unknown>;
+    getParam?: (id: number) => Promise<unknown>;
+    setParam?: (id: number, value: number) => Promise<unknown>;
+  };
+  if (typeof effect.getParams !== 'function') {
+    setStatus(ui, `Slot ${idx + 1}: plugin doesn't expose params.`);
+    return;
+  }
+
+  let params: ParamInfo[] = [];
+  try {
+    // AWP's `getParams` returns the CBOR-decoded array directly (it also
+    // attaches `param.value` to each entry from `getParam`).
+    const raw = (await effect.getParams()) as ParamInfo[] | { params?: ParamInfo[] } | undefined;
+    if (Array.isArray(raw)) params = raw;
+    else if (raw && Array.isArray((raw as { params?: ParamInfo[] }).params)) {
+      params = (raw as { params: ParamInfo[] }).params;
+    }
+  } catch (err) {
+    showError(ui, err);
+    return;
+  }
+
+  const panel = document.createElement('div');
+  panel.className = 'pluginPanel pluginPanel--auto';
+  panel.dataset.slotIndex = String(idx);
+  panel.style.width = '320px';
+
+  const head = document.createElement('div');
+  head.className = 'pluginPanelHead';
+  const title = document.createElement('span');
+  title.className = 'pluginPanelTitle';
+  title.textContent = `${slot.label} · params`;
+  head.appendChild(title);
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'pluginPanelClose';
+  closeBtn.textContent = '×';
+  closeBtn.title = 'Close';
+  closeBtn.addEventListener('click', () => closeAutoUi(idx));
+  head.appendChild(closeBtn);
+  panel.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'pluginPanelBody pluginPanelBody--auto';
+
+  if (params.length === 0) {
+    const note = document.createElement('p');
+    note.className = 'autoEmpty';
+    note.textContent = 'No parameters.';
+    body.appendChild(note);
+  } else {
+    for (const p of params) {
+      const row = buildParamRow(idx, p, effect);
+      body.appendChild(row);
+    }
+  }
+  panel.appendChild(body);
+
+  const container = document.getElementById('pluginPanels');
+  if (!container) return;
+  container.appendChild(panel);
+  positionPanel(panel);
+  autoPanels.set(idx, panel);
+  wirePanelDrag(panel);
+}
+
+function buildParamRow(
+  _idx: number,
+  p: ParamInfo,
+  effect: { getParam?: (id: number) => Promise<unknown>; setParam?: (id: number, v: number) => Promise<unknown> }
+): HTMLElement {
+  const row = document.createElement('label');
+  row.className = 'autoParam';
+
+  const head = document.createElement('span');
+  head.className = 'autoParamHead';
+  const name = document.createElement('span');
+  name.className = 'autoParamName';
+  name.textContent = p.name || `#${p.id}`;
+  const valueEl = document.createElement('span');
+  valueEl.className = 'autoParamValue';
+  valueEl.textContent = p.default.toFixed(3);
+  head.appendChild(name);
+  head.appendChild(valueEl);
+
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = String(p.min);
+  slider.max = String(p.max);
+  // Reasonable default resolution; finer-grained for narrow ranges.
+  const span = p.max - p.min;
+  slider.step = span > 0 ? String(span / 1000) : '0.001';
+  slider.value = String(p.default);
+
+  // Pull the current value once on open so the slider matches plugin state.
+  if (typeof effect.getParam === 'function') {
+    void effect.getParam(p.id).then((v) => {
+      if (typeof v === 'number') {
+        slider.value = String(v);
+        valueEl.textContent = v.toFixed(3);
+      }
+    }).catch(() => { /* keep default */ });
+  }
+
+  slider.addEventListener('input', () => {
+    const v = parseFloat(slider.value);
+    valueEl.textContent = v.toFixed(3);
+    if (typeof effect.setParam === 'function') void effect.setParam(p.id, v);
+  });
+
+  row.appendChild(head);
+  row.appendChild(slider);
+  return row;
+}
+
+function closeAutoUi(idx: number): void {
+  const panel = autoPanels.get(idx);
+  if (!panel) return;
+  panel.remove();
+  autoPanels.delete(idx);
 }
 
 function closePluginUi(idx?: number): void {

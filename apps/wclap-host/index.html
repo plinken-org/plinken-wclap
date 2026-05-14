@@ -102,6 +102,23 @@
             <span class="meterLabel">R</span>
             <div class="meterBar"><div id="meterR" class="meterFill"></div></div>
           </div>
+          <div class="meter">
+            <span class="meterLabel">vol</span>
+            <div class="masterVolumeWrap">
+              <input
+                id="masterVolume"
+                class="masterVolume"
+                type="range"
+                min="-60"
+                max="6"
+                step="0.1"
+                value="-6"
+                aria-label="Master output volume in decibels"
+              />
+              <span class="masterVolumeTick" aria-hidden="true">0</span>
+            </div>
+            <span id="masterVolumeValue" class="masterVolumeValue">−6.0 dB</span>
+          </div>
         </div>
 
         <pre id="errorBox" class="error" hidden></pre>

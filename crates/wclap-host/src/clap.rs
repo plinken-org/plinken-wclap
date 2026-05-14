@@ -102,6 +102,72 @@ pub mod host_webview {
     pub const SIZE: usize = 4;
 }
 
+pub const EXT_PARAMS: &[u8] = b"clap.params\0";
+
+pub mod params {
+    //! `wclap_plugin_params` — the parameter-introspection extension.
+    pub const COUNT: usize = 0;
+    pub const GET_INFO: usize = 4;
+    pub const GET_VALUE: usize = 8;
+    pub const VALUE_TO_TEXT: usize = 12;
+    pub const TEXT_TO_VALUE: usize = 16;
+    pub const FLUSH: usize = 20;
+    pub const SIZE: usize = 24;
+}
+
+pub mod param_info {
+    //! `clap_param_info` — the descriptor `get_info` fills.
+    //! Layout (wasm32 / wclap32 — `Pointer<T>` is 4 bytes, `usize` 4 bytes):
+    //!   id:        u32             at 0
+    //!   flags:     u32             at 4
+    //!   cookie:    Pointer<void>   at 8
+    //!   name:      char[256]       at 12
+    //!   module:    char[1024]      at 268
+    //!   <4 bytes alignment pad to 8-align min_value (at 1296)>
+    //!   min_value: f64             at 1296
+    //!   max_value: f64             at 1304
+    //!   default:   f64             at 1312
+    //!   total = 1320 (8-aligned)
+    pub const ID: usize = 0;
+    pub const FLAGS: usize = 4;
+    pub const COOKIE: usize = 8;
+    pub const NAME: usize = 12;
+    pub const NAME_LEN: usize = 256;
+    pub const MODULE: usize = 268;
+    pub const MODULE_LEN: usize = 1024;
+    pub const MIN_VALUE: usize = 1296;
+    pub const MAX_VALUE: usize = 1304;
+    pub const DEFAULT_VALUE: usize = 1312;
+    pub const SIZE: usize = 1320;
+}
+
+pub mod event_param_value {
+    //! `clap_event_param_value` — queued for `events_in_get` so the plugin
+    //! applies a UI-driven param change on its next process block.
+    //! Layout (16-byte header + body, body's f64 needs 8-alignment):
+    //!   header:    16 bytes        at 0
+    //!   param_id:  u32             at 16
+    //!   cookie:    Pointer<void>   at 20
+    //!   note_id:   i32             at 24
+    //!   port_index:i16             at 28
+    //!   channel:   i16             at 30
+    //!   key:       i16             at 32
+    //!   <6 bytes pad to align value to 40>
+    //!   value:     f64             at 40
+    //!   total = 48
+    pub const HEADER_SIZE: usize = 16;
+    pub const PARAM_ID: usize = 16;
+    pub const COOKIE: usize = 20;
+    pub const NOTE_ID: usize = 24;
+    pub const PORT_INDEX: usize = 28;
+    pub const CHANNEL: usize = 30;
+    pub const KEY: usize = 32;
+    pub const VALUE: usize = 40;
+    pub const SIZE: usize = 48;
+}
+
+pub const EVENT_PARAM_VALUE_TYPE: u16 = 5;
+
 pub mod audio_ports {
     //! `wclap_plugin_audio_ports` — extension returned by
     //! `plugin.get_extension(plugin, "clap.audio-ports")`.
@@ -188,6 +254,9 @@ mod tests {
         assert_eq!(output_events::SIZE, 8);
         assert_eq!(webview::SIZE, 12);
         assert_eq!(host_webview::SIZE, 4);
+        assert_eq!(params::SIZE, 24);
+        assert_eq!(param_info::SIZE, 1320);
+        assert_eq!(event_param_value::SIZE, 48);
     }
 
     #[test]
