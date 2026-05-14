@@ -1,0 +1,61 @@
+{
+  "generatedAt": "2026-05-14T06:03:04.762Z",
+  "items": [
+    {
+      "id": "com.plinken.auto-pan",
+      "label": "Plinken: Auto-Pan",
+      "url": "/samples/com.plinken.auto-pan.wclap.wasm",
+      "vendor": "Plinken",
+      "version": "0.1.0",
+      "description": "Stereo auto-panner with sine LFO. Two parameters: speed (Hz) and wet/dry mix.",
+      "features": [
+        "audio-effect",
+        "utility"
+      ],
+      "license": "MIT",
+      "homepage": "https://plinken.org",
+      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/auto-pan"
+    },
+    {
+      "id": "signalsmith-basics",
+      "label": "Signalsmith Basics",
+      "url": "/samples/signalsmith-basics.wclap.tar.gz",
+      "vendor": "Signalsmith Audio",
+      "license": "MIT",
+      "source": "https://github.com/WebCLAP/examples/tree/main/signalsmith-basics"
+    },
+    {
+      "id": "signalsmith-clap-cpp",
+      "label": "Signalsmith CLAP C++",
+      "url": "/samples/signalsmith-clap-cpp.wclap.tar.gz",
+      "vendor": "Signalsmith Audio",
+      "license": "MIT",
+      "source": "https://github.com/WebCLAP/examples/tree/main/signalsmith-clap-cpp"
+    },
+    {
+      "id": "clack-gain",
+      "label": "clack: gain",
+      "url": "/samples/clack-gain.wasm",
+      "vendor": "clack",
+      "license": "MIT OR Apache-2.0",
+      "source": "https://github.com/WebCLAP/examples/tree/main/clack"
+    },
+    {
+      "id": "clack-polysynth",
+      "label": "clack: polysynth",
+      "url": "/samples/clack-polysynth.wasm",
+      "hint": "needs MIDI",
+      "vendor": "clack",
+      "license": "MIT OR Apache-2.0",
+      "source": "https://github.com/WebCLAP/examples/tree/main/clack"
+    },
+    {
+      "id": "as-clap",
+      "label": "as-clap: example",
+      "url": "/samples/as-clap-example.wclap.wasm",
+      "vendor": "as-clap",
+      "license": "BSL-1.0",
+      "source": "https://github.com/WebCLAP/examples/tree/main/as-clap"
+    }
+  ]
+}

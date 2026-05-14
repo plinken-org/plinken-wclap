@@ -4,10 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "dev": "node scripts/build-shelf.mjs && vite",
+    "build:shelf": "node scripts/build-shelf.mjs",
+    "build": "node scripts/build-shelf.mjs && tsc --noEmit && vite build",
     "preview": "wrangler dev",
-    "deploy": "vite build && wrangler deploy",
+    "deploy": "node scripts/build-shelf.mjs && vite build && wrangler deploy",
     "check": "tsc --noEmit",
     "cf-typegen": "wrangler types"
   },

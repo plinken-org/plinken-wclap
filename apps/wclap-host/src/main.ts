@@ -26,42 +26,20 @@ interface ShelfItem {
   id: string;
   label: string;
   url: string;
+  vendor?: string;
+  version?: string;
+  description?: string | null;
+  features?: string[];
+  license?: string | null;
+  homepage?: string | null;
+  source?: string;
   hint?: string;
 }
 
-const SHELF: ShelfItem[] = [
-  {
-    id: 'com.plinken.auto-pan',
-    label: 'Plinken: Auto-Pan',
-    url: '/samples/com.plinken.auto-pan.wclap.wasm'
-  },
-  {
-    id: 'signalsmith-basics',
-    label: 'Signalsmith Basics',
-    url: '/samples/signalsmith-basics.wclap.tar.gz'
-  },
-  {
-    id: 'signalsmith-clap-cpp',
-    label: 'Signalsmith CLAP C++',
-    url: '/samples/signalsmith-clap-cpp.wclap.tar.gz'
-  },
-  {
-    id: 'clack-gain',
-    label: 'clack: gain',
-    url: '/samples/clack-gain.wasm'
-  },
-  {
-    id: 'clack-polysynth',
-    label: 'clack: polysynth',
-    url: '/samples/clack-polysynth.wasm',
-    hint: 'needs MIDI'
-  },
-  {
-    id: 'as-clap',
-    label: 'as-clap: example',
-    url: '/samples/as-clap-example.wclap.wasm'
-  }
-];
+// Fetched from /shelf.json at boot. Aggregator script
+// (apps/wclap-host/scripts/build-shelf.mjs) generates it from every
+// `plugins/*/*/plugin.json` plus the external WebCLAP example list.
+let SHELF: ShelfItem[] = [];
 
 type SlotSource =
   | { kind: 'url'; url: string }
@@ -126,10 +104,25 @@ ui.playBtn.disabled = false;
 ui.playBtn.addEventListener('click', () => void onPlay());
 ui.stopBtn.addEventListener('click', () => void onStop());
 
-renderShelf();
 renderRack();
 wirePluginModal();
 void registerPluginProxy();
+void loadShelf();
+
+async function loadShelf(): Promise<void> {
+  try {
+    const res = await fetch('/shelf.json');
+    if (!res.ok) {
+      console.warn(`[wclap-host] /shelf.json fetch failed: ${res.status}`);
+    } else {
+      const data = (await res.json()) as { items?: ShelfItem[] };
+      if (Array.isArray(data.items)) SHELF = data.items;
+    }
+  } catch (err) {
+    console.warn('[wclap-host] /shelf.json fetch errored', err);
+  }
+  renderShelf();
+}
 
 async function onPlay(): Promise<void> {
   ui.playBtn.disabled = true;
