@@ -105,7 +105,18 @@
       </article>
 
       <article class="card">
-        <div class="cardTag">03 / OPEN</div>
+        <div class="cardTag">03 / REGISTRY</div>
+        <h2>Open catalog</h2>
+        <p>
+          Every plugin is exposed at one CORS-open endpoint —
+          <a href="/shelf.json"><code>plinken.org/shelf.json</code></a>.
+          Any host, CLI, or MCP server can fetch the catalog and the
+          artifacts without auth.
+        </p>
+      </article>
+
+      <article class="card">
+        <div class="cardTag">04 / OPEN</div>
         <h2>In the open</h2>
         <p>
           Public monorepo, public progress, public discussion. Built alongside
