@@ -52,6 +52,22 @@ pub(crate) struct Plugin {
     /// by `createPlugin`. `_wclap_host_get_extension` returns this when
     /// the plugin asks for `clap.webview/3`.
     pub(crate) host_webview_struct_ptr: u32,
+    /// `clap.state` extension pointer, lazy-cached by the first
+    /// save/load call. Zero if the plugin doesn't expose state.
+    pub(crate) state_ext_ptr: u32,
+    /// `clap_ostream` allocated in plugin memory at `createPlugin`. Reused
+    /// across every `pluginSaveState` — its `ctx` field carries the plugin
+    /// handle so the write callback can find back to `state_save_buf`.
+    pub(crate) ostream_struct_ptr: u32,
+    /// Symmetric `clap_istream` for `pluginLoadState`.
+    pub(crate) istream_struct_ptr: u32,
+    /// Accumulator the `_wclap_state_write` stub appends to during
+    /// `plugin.state.save`. Cleared at the start of each `pluginSaveState`.
+    pub(crate) state_save_buf: Vec<u8>,
+    /// Bytes the next `plugin.state.load` will consume. `pluginLoadState`
+    /// fills this from the JS-supplied byte buffer.
+    pub(crate) state_load_buf: Vec<u8>,
+    pub(crate) state_load_cursor: usize,
     /// Events queued by `pluginAcceptEvent` since the last process block.
     /// Drained on each `pluginProcess` — marshalled into plugin memory,
     /// then handed to the plugin via the `events_in_*` host stubs.
@@ -79,6 +95,11 @@ fn pool() -> &'static mut PluginPool {
 #[allow(dead_code)] // first reader arrives at step 5 (`pluginGetInfo`).
 pub(crate) fn get(handle: u32) -> &'static mut Plugin {
     pool().map.get_mut(&handle).expect("bad plugin handle")
+}
+
+#[allow(dead_code)]
+pub(crate) fn try_get(handle: u32) -> Option<&'static mut Plugin> {
+    pool().map.get_mut(&handle)
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +151,9 @@ unsafe fn register_stubs(inst: u32, hosted_handle: u32) -> HostStubIndices {
     };
     // clap_host_webview.send is `bool(host, buf, size)` → "IIII" (i32 return + 3 i32 args).
     const SIG_IIII: &[u8] = b"IIII";
+    // clap_ostream.write / clap_istream.read: i64(stream*, buf*, u64 size).
+    // Sig string: "LIIL" — i64 return + (i32, i32, i64) args.
+    const SIG_LIIL: &[u8] = b"LIIL";
     HostStubIndices {
         get_extension: reg(host_stubs::get_extension_index(), host_stubs::SIG_III),
         request_restart: reg(host_stubs::request_restart_index(), host_stubs::SIG_VI),
@@ -139,6 +163,8 @@ unsafe fn register_stubs(inst: u32, hosted_handle: u32) -> HostStubIndices {
         events_in_get: reg(host_stubs::events_in_get_index(), host_stubs::SIG_III),
         events_out_try_push: reg(host_stubs::events_out_try_push_index(), host_stubs::SIG_III),
         host_webview_send: reg(host_stubs::host_webview_send_index(), SIG_IIII),
+        state_write: reg(host_stubs::state_write_index(), SIG_LIIL),
+        state_read: reg(host_stubs::state_read_index(), SIG_LIIL),
     }
 }
 
@@ -180,6 +206,21 @@ unsafe fn build_host_webview_struct(inst: u32, send_index: u32) -> u32 {
     let ptr = malloc32(inst, clap::host_webview::SIZE as u32);
     let bytes = send_index.to_le_bytes();
     memcpyToOther32(inst, ptr + clap::host_webview::SEND as u32, bytes.as_ptr(), 4);
+    ptr
+}
+
+/// Build a `clap_istream` or `clap_ostream` (same shape: `ctx + fn_ptr`,
+/// 8 bytes total). `ctx` is the plugin handle so the read/write stubs can
+/// resolve back to their per-plugin save/load buffers.
+#[cfg(target_arch = "wasm32")]
+unsafe fn build_stream_struct(inst: u32, plugin_handle: u32, fn_index: u32) -> u32 {
+    let ptr = malloc32(inst, clap::istream::SIZE as u32);
+    let mut buf = [0u8; clap::istream::SIZE];
+    buf[clap::istream::CTX..clap::istream::CTX + 4]
+        .copy_from_slice(&plugin_handle.to_le_bytes());
+    buf[clap::istream::READ..clap::istream::READ + 4]
+        .copy_from_slice(&fn_index.to_le_bytes());
+    memcpyToOther32(inst, ptr, buf.as_ptr(), buf.len() as u32);
     ptr
 }
 
@@ -435,6 +476,13 @@ pub extern "C" fn createPlugin(hosted_handle: u32, plugin_id_bytes: u32) -> u32 
         };
         let host_webview_struct_ptr =
             build_host_webview_struct(walk.inst, stubs.host_webview_send);
+        // Pre-allocate the clap_ostream / clap_istream structs in plugin
+        // memory so save/load just reset the per-plugin byte buffers and
+        // call into the plugin — no re-allocation per save.
+        let ostream_struct_ptr =
+            build_stream_struct(walk.inst, plugin_handle, stubs.state_write);
+        let istream_struct_ptr =
+            build_stream_struct(walk.inst, plugin_handle, stubs.state_read);
         pool().map.insert(
             plugin_handle,
             Plugin {
@@ -445,6 +493,12 @@ pub extern "C" fn createPlugin(hosted_handle: u32, plugin_id_bytes: u32) -> u32 
                 webview_ext_ptr: 0,
                 params_ext_ptr: 0,
                 host_webview_struct_ptr,
+                state_ext_ptr: 0,
+                ostream_struct_ptr,
+                istream_struct_ptr,
+                state_save_buf: Vec::new(),
+                state_load_buf: Vec::new(),
+                state_load_cursor: 0,
                 event_queue: Vec::new(),
                 current_event_ptrs: Vec::new(),
             },
@@ -1423,6 +1477,203 @@ pub extern "C" fn pluginParamsFlush(plugin_handle: u32) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// clap.state — pluginSaveState / pluginLoadState
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+unsafe fn ensure_state_ext(plugin_handle: u32) -> u32 {
+    let cached = get(plugin_handle).state_ext_ptr;
+    if cached != 0 {
+        return cached;
+    }
+    let (inst, plugin_ptr) = {
+        let p = get(plugin_handle);
+        (p.instance_handle, p.plugin_ptr)
+    };
+    let ext = plugin_get_extension(inst, plugin_ptr, clap::EXT_STATE);
+    get(plugin_handle).state_ext_ptr = ext;
+    ext
+}
+
+/// `pluginSaveState(pluginHandle, bytesHandle) -> bool`
+///
+/// Drive `clap.state.save`, accumulating whatever the plugin pushes through
+/// the ostream into `state_save_buf`, then publish those bytes into the JS
+/// bytes pool. Returns 1 on success (page reads bytes), 0 on failure or
+/// missing extension (page treats it as "plugin doesn't save state").
+#[no_mangle]
+pub extern "C" fn pluginSaveState(plugin_handle: u32, bytes_handle: u32) -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        let state_ext = ensure_state_ext(plugin_handle);
+        if state_ext == 0 {
+            return 0;
+        }
+        let (inst, plugin_ptr, ostream_ptr) = {
+            let p = get(plugin_handle);
+            (p.instance_handle, p.plugin_ptr, p.ostream_struct_ptr)
+        };
+
+        // Fresh save buffer per call so callers can save multiple times.
+        get(plugin_handle).state_save_buf.clear();
+
+        let mut args2 = [0u8; SLOT_SIZE * 2];
+        write_arg_u32((&mut args2[0..SLOT_SIZE]).try_into().unwrap(), plugin_ptr);
+        write_arg_u32(
+            (&mut args2[SLOT_SIZE..]).try_into().unwrap(),
+            ostream_ptr,
+        );
+        let mut result = [0u8; SLOT_SIZE];
+        call32(
+            inst,
+            state_ext + clap::state::SAVE as u32,
+            1,
+            result.as_mut_ptr(),
+            args2.as_ptr(),
+            2,
+        );
+        if read_result_u32(&result) == 0 {
+            return 0;
+        }
+        // Take the accumulated buffer; pool's owned now.
+        let buf = core::mem::take(&mut get(plugin_handle).state_save_buf);
+        crate::bytes::set(bytes_handle, &buf);
+        1
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (plugin_handle, bytes_handle);
+        0
+    }
+}
+
+/// `pluginLoadState(pluginHandle, bytesHandle) -> bool`
+///
+/// Populate `state_load_buf` from the JS bytes pool, then call
+/// `clap.state.load`. The istream's read callback feeds bytes from the
+/// buffer at `state_load_cursor`. Returns the plugin's bool unchanged.
+#[no_mangle]
+pub extern "C" fn pluginLoadState(plugin_handle: u32, bytes_handle: u32) -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        let state_ext = ensure_state_ext(plugin_handle);
+        if state_ext == 0 {
+            return 0;
+        }
+        // Snapshot the JS-supplied bytes into our load buffer + reset cursor.
+        let incoming = crate::bytes::view(bytes_handle).to_vec();
+        {
+            let p = get(plugin_handle);
+            p.state_load_buf = incoming;
+            p.state_load_cursor = 0;
+        }
+        let (inst, plugin_ptr, istream_ptr) = {
+            let p = get(plugin_handle);
+            (p.instance_handle, p.plugin_ptr, p.istream_struct_ptr)
+        };
+
+        let mut args2 = [0u8; SLOT_SIZE * 2];
+        write_arg_u32((&mut args2[0..SLOT_SIZE]).try_into().unwrap(), plugin_ptr);
+        write_arg_u32(
+            (&mut args2[SLOT_SIZE..]).try_into().unwrap(),
+            istream_ptr,
+        );
+        let mut result = [0u8; SLOT_SIZE];
+        call32(
+            inst,
+            state_ext + clap::state::LOAD as u32,
+            1,
+            result.as_mut_ptr(),
+            args2.as_ptr(),
+            2,
+        );
+        read_result_u32(&result)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (plugin_handle, bytes_handle);
+        0
+    }
+}
+
+/// `destroyPlugin(pluginHandle)`
+///
+/// Proper CLAP teardown sequence:
+///   1. `plugin.stop_processing(plugin)`  — let the plugin end its loop
+///   2. `plugin.deactivate(plugin)`       — release activate-time resources
+///   3. `plugin.destroy(plugin)`          — final cleanup of plugin state
+///
+/// Then drop the Plugin pool entry. Plugin-memory allocations (host struct,
+/// audio buffers, event lists, process struct) leak until the wclap
+/// instance itself is dropped — `malloc32` has no free counterpart on the
+/// JS bridge, so we'd need a per-allocation arena to release individually.
+/// Acceptable at M1: unloading a slot drops the whole AudioWorkletNode and
+/// its worker, which reclaims all that memory anyway.
+#[no_mangle]
+pub extern "C" fn destroyPlugin(plugin_handle: u32) {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        let (inst, plugin_ptr, process_ptr) = {
+            let Some(p) = pool().map.get(&plugin_handle) else {
+                return;
+            };
+            (p.instance_handle, p.plugin_ptr, p.process_ptr)
+        };
+        if plugin_ptr == 0 {
+            pool().map.remove(&plugin_handle);
+            return;
+        }
+
+        let mut arg = [0u8; SLOT_SIZE];
+        let mut result = [0u8; SLOT_SIZE];
+        write_arg_u32(&mut arg, plugin_ptr);
+
+        // 1. stop_processing — only if pluginStart succeeded (process_ptr set).
+        if process_ptr != 0 {
+            call32(
+                inst,
+                plugin_ptr + clap::plugin::STOP_PROCESSING as u32,
+                1,
+                result.as_mut_ptr(),
+                arg.as_ptr(),
+                1,
+            );
+            // 2. deactivate
+            call32(
+                inst,
+                plugin_ptr + clap::plugin::DEACTIVATE as u32,
+                1,
+                result.as_mut_ptr(),
+                arg.as_ptr(),
+                1,
+            );
+        }
+
+        // 3. destroy — always called once after create_plugin.
+        call32(
+            inst,
+            plugin_ptr + clap::plugin::DESTROY as u32,
+            1,
+            result.as_mut_ptr(),
+            arg.as_ptr(),
+            1,
+        );
+
+        // Detach from Hosted's plugin list and drop the pool entry.
+        let hosted_handle = pool().map.get(&plugin_handle).map(|p| p.hosted_handle);
+        if let Some(h) = hosted_handle {
+            let hosted = host::get(h);
+            hosted.plugins.retain(|&id| id != plugin_handle);
+        }
+        pool().map.remove(&plugin_handle);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = plugin_handle;
+    }
+}
+
 /// `pluginMainThread(pluginHandle)` — called from the AWP for single-threaded
 /// plugins after each `process` call (see `clap-audioworkletprocessor.mjs`
 /// line 209). Calls `clap_plugin.on_main_thread`.
@@ -1430,10 +1681,16 @@ pub extern "C" fn pluginParamsFlush(plugin_handle: u32) {
 pub extern "C" fn pluginMainThread(plugin_handle: u32) {
     #[cfg(target_arch = "wasm32")]
     unsafe {
-        let (inst, plugin_ptr) = {
-            let p = get(plugin_handle);
-            (p.instance_handle, p.plugin_ptr)
+        // AWP fires this after every remote method, including after
+        // destroyPlugin zeroed pluginPtr — be tolerant of a missing entry
+        // rather than panic'ing with `unreachable`.
+        let (inst, plugin_ptr) = match try_get(plugin_handle) {
+            Some(p) => (p.instance_handle, p.plugin_ptr),
+            None => return,
         };
+        if plugin_ptr == 0 {
+            return;
+        }
         let mut arg = [0u8; SLOT_SIZE];
         write_arg_u32(&mut arg, plugin_ptr);
         let mut result = [0u8; SLOT_SIZE];

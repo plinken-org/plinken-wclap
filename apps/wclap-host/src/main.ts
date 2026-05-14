@@ -524,12 +524,41 @@ async function unloadSlot(
   if (!slot || !slot.effect) return;
 
   closePluginUi(idx);
+  closeAutoUi(idx);
 
+  // Unroute FIRST so neither audio buffers nor CLAP events can land on
+  // the plugin while we're tearing it down. `disconnectEvents(null)` drops
+  // all routing entries this node was a source for; `disconnect()` pulls
+  // the AudioNode out of the WebAudio graph so `process()` stops being
+  // scheduled. After both, the AWP's message handler is the only thing
+  // that can still reach the plugin — and the next message we send is
+  // destroyPlugin itself.
+  try {
+    slot.effect.disconnectEvents?.(null);
+  } catch {
+    // Plugin may not expose event ports — ignore.
+  }
   try {
     slot.effect.disconnect();
   } catch {
     // Already disconnected — ignore.
   }
+
+  // Now-quiescent plugin gets the proper CLAP teardown:
+  //   stop_processing → deactivate → destroy.
+  // The remote method round-trips into the AWP, serialising with anything
+  // already in the worklet's message queue.
+  const destroyPlugin = (
+    slot.effect as { destroyPlugin?: () => Promise<unknown> }
+  ).destroyPlugin;
+  if (typeof destroyPlugin === 'function') {
+    try {
+      await destroyPlugin.call(slot.effect);
+    } catch (err) {
+      console.warn('[wclap-host] destroyPlugin failed', err);
+    }
+  }
+
   if (slot.blobUrl) URL.revokeObjectURL(slot.blobUrl);
 
   slots[idx] = emptySlot();
@@ -593,6 +622,28 @@ function renderRack(): void {
         void toggleAutoUi(idx);
       });
       slotEl.appendChild(autoBtn);
+
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button';
+      saveBtn.className = 'slotStrip slotState';
+      saveBtn.textContent = 'save';
+      saveBtn.title = 'Copy plugin state to clipboard (base64)';
+      saveBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void copyStateToClipboard(idx);
+      });
+      slotEl.appendChild(saveBtn);
+
+      const loadBtn = document.createElement('button');
+      loadBtn.type = 'button';
+      loadBtn.className = 'slotStrip slotState';
+      loadBtn.textContent = 'load';
+      loadBtn.title = 'Load plugin state from clipboard (base64)';
+      loadBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void loadStateFromClipboard(idx);
+      });
+      slotEl.appendChild(loadBtn);
     }
 
     if (occupied && slot.plugins.length > 1) {
@@ -1103,6 +1154,92 @@ function closeAutoUi(idx: number): void {
   if (!panel) return;
   panel.remove();
   autoPanels.delete(idx);
+}
+
+// ---------------------------------------------------------------------------
+// State save / load — round-trip through base64 in the clipboard
+// ---------------------------------------------------------------------------
+//
+// Plugin state is opaque bytes (the plugin's own format). We don't try to
+// interpret it — base64 makes the bytes pasteable in any text field, the
+// other side decodes and hands the raw buffer back to `effect.loadState`.
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
+function base64ToBytes(str: string): Uint8Array {
+  const trimmed = str.replace(/\s+/g, '');
+  const binary = atob(trimmed);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+async function copyStateToClipboard(idx: number): Promise<void> {
+  const slot = slots[idx];
+  if (!slot?.effect) return;
+  const saveState = (slot.effect as { saveState?: () => Promise<unknown> })
+    .saveState;
+  if (typeof saveState !== 'function') {
+    setStatus(ui, `Slot ${idx + 1}: plugin doesn't support state save.`);
+    return;
+  }
+  try {
+    const raw = await saveState.call(slot.effect);
+    if (!raw) {
+      setStatus(ui, `Slot ${idx + 1}: plugin returned no state.`);
+      return;
+    }
+    const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw as ArrayBuffer);
+    const b64 = bytesToBase64(bytes);
+    await navigator.clipboard.writeText(b64);
+    setStatus(ui, `Slot ${idx + 1}: copied ${bytes.byteLength} bytes of state to clipboard.`);
+  } catch (err) {
+    showError(ui, err);
+  }
+}
+
+async function loadStateFromClipboard(idx: number): Promise<void> {
+  const slot = slots[idx];
+  if (!slot?.effect) return;
+  const loadState = (
+    slot.effect as { loadState?: (b: ArrayBuffer) => Promise<unknown> }
+  ).loadState;
+  if (typeof loadState !== 'function') {
+    setStatus(ui, `Slot ${idx + 1}: plugin doesn't support state load.`);
+    return;
+  }
+  let text: string;
+  try {
+    text = await navigator.clipboard.readText();
+  } catch (err) {
+    showError(ui, err);
+    return;
+  }
+  if (!text.trim()) {
+    setStatus(ui, `Slot ${idx + 1}: clipboard is empty.`);
+    return;
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = base64ToBytes(text);
+  } catch (err) {
+    setStatus(ui, `Slot ${idx + 1}: clipboard contents aren't valid base64.`);
+    return;
+  }
+  try {
+    const ok = await loadState.call(slot.effect, bytes.buffer as ArrayBuffer);
+    if (ok) {
+      setStatus(ui, `Slot ${idx + 1}: loaded ${bytes.byteLength} bytes of state.`);
+    } else {
+      setStatus(ui, `Slot ${idx + 1}: plugin rejected the state.`);
+    }
+  } catch (err) {
+    showError(ui, err);
+  }
 }
 
 function closePluginUi(idx?: number): void {

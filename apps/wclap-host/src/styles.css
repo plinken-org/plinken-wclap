@@ -272,6 +272,9 @@ h1 {
   border-color: var(--accent);
   color: var(--accent);
 }
+.slotState {
+  opacity: 0.85;
+}
 .slotStrip:disabled {
   opacity: 0.4;
   cursor: not-allowed;

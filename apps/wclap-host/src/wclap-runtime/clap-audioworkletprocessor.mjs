@@ -188,7 +188,11 @@ class ClapAudioWorkletProcessor extends AudioWorkletProcessor {
 				try {
 					let result = await this.remoteMethods[method].call(this, ...args);
 					this.port.postMessage([requestId, null, result]);
-					if (this.instanceSingleThreaded) this.mainThreadCallback();
+					// Skip the main-thread tick if the plugin was just
+					// destroyed by `remoteMethods.destroyPlugin` — pluginPtr
+					// has been zeroed and the host wasm would panic on a
+					// stale lookup.
+					if (this.instanceSingleThreaded && this.pluginPtr) this.mainThreadCallback();
 				} catch (e) {
 					this.failWithError(e);
 					this.port.postMessage([requestId, e]);
@@ -291,6 +295,23 @@ class ClapAudioWorkletProcessor extends AudioWorkletProcessor {
 		acceptEvent(eventBytes) {
 			let routing = globalThis.clapRouting[this.routingId];
 			if (routing) routing.events.push(new Uint8Array(eventBytes));
+		},
+		// PATCH (plinken-org): proper CLAP teardown. Stop the audio loop
+		// first so the host wasm's stop_processing/deactivate/destroy
+		// sequence runs without a concurrent `process()` call landing on a
+		// half-torn-down plugin. `pluginPtr` is zeroed so any straggling
+		// remote-method call short-circuits.
+		destroyPlugin() {
+			this.running = false;
+			this.ready = false;
+			if (this.pluginPtr) {
+				try {
+					this.hostApi.destroyPlugin(this.pluginPtr);
+				} catch (e) {
+					console.warn('destroyPlugin threw:', e);
+				}
+				this.pluginPtr = 0;
+			}
 		}
 	};
 

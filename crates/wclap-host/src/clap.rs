@@ -168,6 +168,29 @@ pub mod event_param_value {
 
 pub const EVENT_PARAM_VALUE_TYPE: u16 = 5;
 
+pub const EXT_STATE: &[u8] = b"clap.state\0";
+
+pub mod state {
+    //! `wclap_plugin_state` — `clap.state` extension. Two function ptrs.
+    pub const SAVE: usize = 0; // Function<bool, plugin*, ostream*>
+    pub const LOAD: usize = 4; // Function<bool, plugin*, istream*>
+    pub const SIZE: usize = 8;
+}
+
+pub mod istream {
+    //! `clap_istream` — host-provided byte source the plugin reads from.
+    pub const CTX: usize = 0; // Pointer<void> (plugin_handle in our impl)
+    pub const READ: usize = 4; // Function<i64, stream*, buf*, u64 size>
+    pub const SIZE: usize = 8;
+}
+
+pub mod ostream {
+    //! `clap_ostream` — host-provided byte sink the plugin writes into.
+    pub const CTX: usize = 0;
+    pub const WRITE: usize = 4; // Function<i64, stream*, buf*, u64 size>
+    pub const SIZE: usize = 8;
+}
+
 pub mod audio_ports {
     //! `wclap_plugin_audio_ports` — extension returned by
     //! `plugin.get_extension(plugin, "clap.audio-ports")`.
@@ -257,6 +280,9 @@ mod tests {
         assert_eq!(params::SIZE, 24);
         assert_eq!(param_info::SIZE, 1320);
         assert_eq!(event_param_value::SIZE, 48);
+        assert_eq!(state::SIZE, 8);
+        assert_eq!(istream::SIZE, 8);
+        assert_eq!(ostream::SIZE, 8);
     }
 
     #[test]

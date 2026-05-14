@@ -40,6 +40,8 @@ static TAG_EVENTS_IN_SIZE: u8 = 0;
 static TAG_EVENTS_IN_GET: u8 = 0;
 static TAG_EVENTS_OUT_TRY_PUSH: u8 = 0;
 static TAG_HOST_WEBVIEW_SEND: u8 = 0;
+static TAG_STATE_WRITE: u8 = 0;
+static TAG_STATE_READ: u8 = 0;
 
 #[inline(never)]
 fn touch(tag: &'static u8) {
@@ -166,6 +168,71 @@ pub extern "C" fn _wclap_events_out_try_push(
     1
 }
 
+/// `clap_ostream.write(stream, buf, size) -> i64` — the plugin pushes a
+/// chunk of bytes during `clap.state.save`. We pull the bytes out of plugin
+/// memory and append them to the per-plugin `state_save_buf`. Return value
+/// is bytes-written (or -1 on error); we always accept the full chunk.
+#[no_mangle]
+pub extern "C" fn _wclap_state_write(
+    ctx: u32,
+    stream_ptr: u32,
+    buf_ptr: u32,
+    size: u64,
+) -> i64 {
+    touch(&TAG_STATE_WRITE);
+    let inst = crate::host::get(ctx).instance_handle;
+    let plugin_handle = plugin_handle_from_list(inst, stream_ptr); // ctx at offset 0
+    let n = size as usize;
+    if n == 0 {
+        return 0;
+    }
+    let mut tmp = alloc::vec![0u8; n];
+    unsafe {
+        crate::instance::memcpyFromOther32(inst, tmp.as_mut_ptr(), buf_ptr, n as u32);
+    }
+    let plugin = crate::plugin::get(plugin_handle);
+    plugin.state_save_buf.extend_from_slice(&tmp);
+    size as i64
+}
+
+/// `clap_istream.read(stream, buf, size) -> i64` — the plugin pulls a
+/// chunk of bytes during `clap.state.load`. We feed it from the
+/// pre-populated `state_load_buf` at the current cursor. Returns
+/// bytes-read (0 at EOF, -1 on error).
+#[no_mangle]
+pub extern "C" fn _wclap_state_read(
+    ctx: u32,
+    stream_ptr: u32,
+    buf_ptr: u32,
+    size: u64,
+) -> i64 {
+    touch(&TAG_STATE_READ);
+    let inst = crate::host::get(ctx).instance_handle;
+    let plugin_handle = plugin_handle_from_list(inst, stream_ptr);
+    let plugin = crate::plugin::get(plugin_handle);
+
+    let avail = plugin
+        .state_load_buf
+        .len()
+        .saturating_sub(plugin.state_load_cursor);
+    let to_read = core::cmp::min(avail, size as usize);
+    if to_read == 0 {
+        return 0;
+    }
+    let start = plugin.state_load_cursor;
+    let end = start + to_read;
+    unsafe {
+        crate::instance::memcpyToOther32(
+            inst,
+            buf_ptr,
+            plugin.state_load_buf[start..end].as_ptr(),
+            to_read as u32,
+        );
+    }
+    plugin.state_load_cursor = end;
+    to_read as i64
+}
+
 /// `clap_host_webview.send(host, buf, size)` — plugin → iframe push.
 /// AWP's `env.webviewSend` looks up its `instancePluginMap` by the
 /// plugin handle returned from `createPlugin`. We stash that handle in
@@ -230,4 +297,10 @@ pub fn events_out_try_push_index() -> u32 {
 }
 pub fn host_webview_send_index() -> u32 {
     _wclap_host_webview_send as *const () as u32
+}
+pub fn state_write_index() -> u32 {
+    _wclap_state_write as *const () as u32
+}
+pub fn state_read_index() -> u32 {
+    _wclap_state_read as *const () as u32
 }
