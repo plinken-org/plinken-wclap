@@ -156,6 +156,40 @@ h1 {
   letter-spacing: 0.04em;
 }
 
+.sampleHint {
+  margin: 0.85rem 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  text-align: center;
+}
+.sampleBtn {
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: inherit;
+  letter-spacing: 0.02em;
+  padding: 0.25rem 0.7rem;
+  margin: 0 0.15rem;
+  border-radius: 4px;
+  border: 1px solid var(--accent-deep);
+  background: rgba(134, 145, 218, 0.08);
+  color: var(--accent);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+.sampleBtn:hover:not(:disabled) {
+  border-color: var(--accent-purple);
+  color: var(--accent-purple);
+  background: rgba(146, 93, 179, 0.10);
+}
+.sampleBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.sampleMeta {
+  color: var(--text-dim);
+}
+
 .status {
   margin-top: 2rem;
   padding: 1.5rem;

@@ -12,6 +12,7 @@ function el<T extends HTMLElement>(id: string): T {
 export interface UiElements {
   drop: HTMLElement;
   fileInput: HTMLInputElement;
+  sampleBtn: HTMLButtonElement;
   statusLabel: HTMLElement;
   pluginLabel: HTMLElement;
   sampleRateLabel: HTMLElement;
@@ -27,6 +28,7 @@ export function getElements(): UiElements {
   return {
     drop: el<HTMLElement>('drop'),
     fileInput: el<HTMLInputElement>('fileInput'),
+    sampleBtn: el<HTMLButtonElement>('sampleBtn'),
     statusLabel: el<HTMLElement>('statusLabel'),
     pluginLabel: el<HTMLElement>('pluginLabel'),
     sampleRateLabel: el<HTMLElement>('sampleRateLabel'),

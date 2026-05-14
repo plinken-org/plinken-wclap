@@ -39,6 +39,30 @@ wireDropZone(ui, (file) => {
   void loadPlugin(file);
 });
 
+const SAMPLE_URL = '/samples/signalsmith-basics.wclap.tar.gz';
+const SAMPLE_NAME = 'signalsmith-basics.wclap';
+
+ui.sampleBtn.addEventListener('click', () => {
+  void loadSample();
+});
+
+async function loadSample(): Promise<void> {
+  ui.sampleBtn.disabled = true;
+  try {
+    setStatus(ui, `Fetching ${SAMPLE_NAME}…`);
+    const res = await fetch(SAMPLE_URL);
+    if (!res.ok) throw new Error(`Fetch failed: ${res.status} ${res.statusText}`);
+    const blob = await res.blob();
+    const file = new File([blob], SAMPLE_NAME, { type: 'application/gzip' });
+    await loadPlugin(file);
+  } catch (err) {
+    showError(ui, err);
+    setStatus(ui, 'Failed to fetch sample plugin. See error below.');
+  } finally {
+    ui.sampleBtn.disabled = false;
+  }
+}
+
 ui.playBtn.addEventListener('click', () => {
   if (!current) return;
   void current.ctx.resume().then(() => {
