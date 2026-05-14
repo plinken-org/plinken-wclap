@@ -3,7 +3,8 @@
 import './wclap-runtime/cap-wasm-memory';
 
 import ClapAudioNode, {
-  type ClapEffectAudioNode
+  type ClapEffectAudioNode,
+  type WclapPluginInfo
 } from './wclap-runtime/clap-audionode.mjs';
 import workletUrl from './wclap-runtime/clap-audioworkletprocessor.mjs?worker&url';
 import {
@@ -57,15 +58,36 @@ const SHELF: ShelfItem[] = [
   }
 ];
 
+type SlotSource =
+  | { kind: 'url'; url: string }
+  | { kind: 'file'; file: File }
+  | null;
+
 interface Slot {
   effect: ClapEffectAudioNode | null;
   node: ClapAudioNode | null;
   blobUrl: string | null;
   label: string;
+  hasUi: boolean;
+  /** All plugins in the loaded bundle (enumerated at load). */
+  plugins: WclapPluginInfo[];
+  /** Which plugin in `plugins` is currently instantiated as `effect`. */
+  pluginIndex: number;
+  /** Original source — used to reload with a different pluginIndex on cycle. */
+  source: SlotSource;
 }
 
 function emptySlot(): Slot {
-  return { effect: null, node: null, blobUrl: null, label: '' };
+  return {
+    effect: null,
+    node: null,
+    blobUrl: null,
+    label: '',
+    hasUi: false,
+    plugins: [],
+    pluginIndex: 0,
+    source: null
+  };
 }
 
 const slots: Slot[] = Array.from({ length: NUM_SLOTS }, emptySlot);
@@ -101,6 +123,8 @@ ui.stopBtn.addEventListener('click', () => void onStop());
 
 renderShelf();
 renderRack();
+wirePluginModal();
+void registerPluginProxy();
 
 async function onPlay(): Promise<void> {
   ui.playBtn.disabled = true;
@@ -216,8 +240,10 @@ function wireAudioState(ctx: AudioContext): void {
 
 // Disconnect everything in the active chain and reconnect:
 //   inGain → slot1.effect → slot2.effect → … → (splitter, destination)
-// Empty slots are skipped (pass-through). Idempotent — call after any slot
-// add/remove/replace.
+// Plus route CLAP events (MIDI/note) along the same order, so a keyboard
+// plugin upstream can drive a synth plugin downstream. Empty slots are
+// skipped (pass-through). Idempotent — call after any slot add/remove/
+// replace.
 function rewire(): void {
   if (!baseGraph) return;
   const { inGain, splitter, ctx } = baseGraph;
@@ -234,20 +260,50 @@ function rewire(): void {
       } catch {
         // Already disconnected — ignore.
       }
+      try {
+        slot.effect.disconnectEvents?.(null);
+      } catch {
+        // Plugin may not support events — ignore.
+      }
     }
   }
 
   let tail: AudioNode = inGain;
+  let prevEffect: ClapEffectAudioNode | null = null;
   for (const slot of slots) {
-    if (slot.effect) {
-      tail.connect(slot.effect);
-      tail = slot.effect;
+    if (!slot.effect) continue;
+    tail.connect(slot.effect);
+    tail = slot.effect;
+    if (prevEffect) {
+      try {
+        prevEffect.connectEvents?.(slot.effect);
+      } catch {
+        // Best-effort — not all plugins expose event ports.
+      }
     }
+    prevEffect = slot.effect;
   }
   tail.connect(splitter);
   tail.connect(ctx.destination);
 
   refreshPluginSummary();
+}
+
+// Switch the slot to the previous/next plugin within its loaded bundle.
+// We do a full reload (fresh ClapAudioNode + new wasm memory) rather than
+// reusing the existing host node: instantiating a second plugin on the
+// same shared-memory host is unreliable — the previous worklet still owns
+// the wclap instance and the new `createNode()` can hang or fail silently
+// on some bundles.
+async function cycleSlot(idx: number, dir: 1 | -1): Promise<void> {
+  const slot = slots[idx];
+  if (!slot.source || slot.plugins.length < 2) return;
+
+  const len = slot.plugins.length;
+  const newIndex = (slot.pluginIndex + dir + len) % len;
+  const src =
+    slot.source.kind === 'url' ? slot.source.url : slot.source.file;
+  await loadIntoSlot(idx, src, undefined, newIndex);
 }
 
 function refreshPluginSummary(): void {
@@ -260,7 +316,8 @@ function refreshPluginSummary(): void {
 async function loadIntoSlot(
   idx: number,
   source: File | string,
-  displayHint?: string
+  displayHint?: string,
+  preferPluginIndex = 0
 ): Promise<void> {
   if (idx < 0 || idx >= slots.length) return;
   clearError(ui);
@@ -269,6 +326,10 @@ async function loadIntoSlot(
     `[data-slot-index="${idx}"]`
   );
   slotEl?.classList.add('loading');
+
+  // Track the blob URL outside the try so the catch can revoke it if loading
+  // fails before the slot takes ownership.
+  let pendingBlobUrl: string | null = null;
 
   try {
     await ensureWorklet();
@@ -314,21 +375,26 @@ async function loadIntoSlot(
     const mime = isWasm ? 'application/wasm' : 'application/gzip';
     const blob = new Blob([buf], { type: mime });
     const blobUrl: string = URL.createObjectURL(blob);
+    pendingBlobUrl = blobUrl;
     const node: ClapAudioNode = new ClapAudioNode({ url: blobUrl });
 
     const plugins = await node.plugins();
     if (plugins.length === 0) {
       throw new Error('No CLAP plugins found in bundle.');
     }
-    const first = plugins[0];
-    if (!first) {
-      throw new Error('Plugin list was empty after length check.');
+    const targetIdx = Math.min(
+      Math.max(preferPluginIndex, 0),
+      plugins.length - 1
+    );
+    const target = plugins[targetIdx];
+    if (!target) {
+      throw new Error('Plugin lookup failed after bounds clamp.');
     }
 
     const graph = baseGraph;
     if (!graph) throw new Error('Base audio graph missing.');
 
-    const effect = await node.createNode(graph.ctx, first.id ?? null, {
+    const effect = await node.createNode(graph.ctx, target.id ?? null, {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [2]
@@ -338,8 +404,24 @@ async function loadIntoSlot(
     const label =
       descriptor.name +
       (descriptor.vendor ? ` · ${descriptor.vendor}` : '');
+    const hasUi =
+      typeof (effect as { openInterface?: unknown }).openInterface ===
+      'function';
 
-    slots[idx] = { effect, node, blobUrl, label };
+    slots[idx] = {
+      effect,
+      node,
+      blobUrl,
+      label,
+      hasUi,
+      plugins,
+      pluginIndex: targetIdx,
+      source:
+        typeof source === 'string'
+          ? { kind: 'url', url: source }
+          : { kind: 'file', file: source }
+    };
+    pendingBlobUrl = null; // ownership transferred to the slot
     rewire();
 
     setStatus(ui, `Slot ${idx + 1}: ${descriptor.name} ready.`);
@@ -351,6 +433,7 @@ async function loadIntoSlot(
     showError(ui, err);
     setStatus(ui, 'Failed to load plugin. See error below.');
   } finally {
+    if (pendingBlobUrl) URL.revokeObjectURL(pendingBlobUrl);
     slotEl?.classList.remove('loading');
   }
 }
@@ -361,6 +444,8 @@ async function unloadSlot(
 ): Promise<void> {
   const slot = slots[idx];
   if (!slot || !slot.effect) return;
+
+  closePluginUi(idx);
 
   try {
     slot.effect.disconnect();
@@ -384,8 +469,11 @@ async function unloadSlot(
 function renderRack(): void {
   ui.rack.innerHTML = '';
   slots.forEach((slot, idx) => {
+    const occupied = slot.effect != null;
+    const cls = ['rackSlot', occupied ? 'occupied' : 'empty'];
+    if (slot.hasUi) cls.push('hasUi');
     const slotEl = document.createElement('div');
-    slotEl.className = `rackSlot ${slot.effect ? 'occupied' : 'empty'}`;
+    slotEl.className = cls.join(' ');
     slotEl.dataset.slotIndex = String(idx);
 
     const num = document.createElement('span');
@@ -395,10 +483,49 @@ function renderRack(): void {
 
     const label = document.createElement('span');
     label.className = 'slotLabel';
-    label.textContent = slot.effect ? slot.label : 'drop a plugin here';
-    // TODO: clicking an occupied label should open the plugin's UI (gui ext).
-    // For now this is purely informational.
+    label.textContent = occupied ? slot.label : 'drop a plugin here';
+    if (occupied && slot.hasUi) {
+      label.title = 'Click to open plugin UI';
+      label.addEventListener('click', () => openPluginUi(idx));
+    }
     slotEl.appendChild(label);
+
+    if (occupied && slot.plugins.length > 1) {
+      const cycle = document.createElement('span');
+      cycle.className = 'slotCycle';
+      const total = slot.plugins.length;
+
+      const prev = document.createElement('button');
+      prev.type = 'button';
+      prev.className = 'slotCycleBtn';
+      prev.textContent = '◀';
+      prev.title = 'Previous plugin in bundle';
+      prev.setAttribute('aria-label', 'Previous plugin in bundle');
+      prev.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void cycleSlot(idx, -1);
+      });
+
+      const count = document.createElement('span');
+      count.className = 'slotCycleCount';
+      count.textContent = `${slot.pluginIndex + 1}/${total}`;
+
+      const next = document.createElement('button');
+      next.type = 'button';
+      next.className = 'slotCycleBtn';
+      next.textContent = '▶';
+      next.title = 'Next plugin in bundle';
+      next.setAttribute('aria-label', 'Next plugin in bundle');
+      next.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void cycleSlot(idx, 1);
+      });
+
+      cycle.appendChild(prev);
+      cycle.appendChild(count);
+      cycle.appendChild(next);
+      slotEl.appendChild(cycle);
+    }
 
     if (slot.effect) {
       const del = document.createElement('button');
@@ -574,6 +701,299 @@ function startTouchDrag(item: ShelfItem, startEvent: PointerEvent): void {
   window.addEventListener('pointermove', onMove);
   window.addEventListener('pointerup', onEnd);
   window.addEventListener('pointercancel', onCancel);
+}
+
+// ---------------------------------------------------------------------------
+// Plugin UI modal — top-of-screen overlay holding the plugin's iframe. The
+// iframe's resources (HTML, JS, CSS, etc.) are served through a service
+// worker that proxies into the slot's in-memory files map.
+// ---------------------------------------------------------------------------
+
+const PROXY_PREFIX = '/plugin-proxy';
+type ProxyRequest = (path: string) => Promise<ArrayBuffer | null>;
+const proxyResolvers = new Map<number, ProxyRequest>();
+const openPanels = new Map<number, HTMLElement>();
+let panelCascade = 0;
+
+function wirePluginModal(): void {
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || openPanels.size === 0) return;
+    const container = document.getElementById('pluginPanels');
+    const last = container?.lastElementChild;
+    if (last instanceof HTMLElement) {
+      const idx = Number.parseInt(last.dataset.slotIndex ?? '', 10);
+      if (Number.isFinite(idx)) closePluginUi(idx);
+    }
+  });
+}
+
+function openPluginUi(idx: number): void {
+  const slot = slots[idx];
+  if (!slot || !slot.effect) return;
+  const openInterface = (
+    slot.effect as { openInterface?: (opts: unknown) => unknown }
+  ).openInterface;
+  if (typeof openInterface !== 'function') {
+    setStatus(ui, `Slot ${idx + 1}: plugin has no UI to open.`);
+    return;
+  }
+
+  const existing = openPanels.get(idx);
+  if (existing) {
+    bringPanelToFront(existing);
+    return;
+  }
+
+  // Register this slot as the proxy source for any plugin-proxy paths it owns.
+  proxyResolvers.set(idx, async (path) => {
+    const getFile = (slot.effect as { getFile?: (p: string) => Promise<unknown> })
+      .getFile;
+    if (typeof getFile !== 'function') return null;
+
+    // Upstream `getWclap()` mutates `pluginPath` on its second pass, appending
+    // `-copy-<random>` — but the files map is keyed off the original prefix.
+    // Try the literal path first, then strip the `-copy-<hex>` segment.
+    let raw = await getFile(path);
+    if (!raw) {
+      const stripped = path.replace(/-copy-[0-9a-fA-F]+(?=\/)/, '');
+      if (stripped !== path) raw = await getFile(stripped);
+    }
+
+    if (raw instanceof ArrayBuffer) return raw;
+    if (ArrayBuffer.isView(raw)) {
+      const view = raw as ArrayBufferView;
+      const out = new ArrayBuffer(view.byteLength);
+      new Uint8Array(out).set(
+        new Uint8Array(
+          view.buffer as ArrayBufferLike,
+          view.byteOffset,
+          view.byteLength
+        )
+      );
+      return out;
+    }
+    return null;
+  });
+
+  const result = openInterface({ resourcePrefix: PROXY_PREFIX });
+  if (!(result instanceof HTMLIFrameElement)) {
+    setStatus(ui, `Slot ${idx + 1}: plugin UI didn't return an iframe.`);
+    proxyResolvers.delete(idx);
+    return;
+  }
+
+  const container = document.getElementById('pluginPanels');
+  if (!container) return;
+
+  const panel = buildPluginPanel(idx, slot.label, result);
+  positionPanel(panel);
+  container.appendChild(panel);
+  openPanels.set(idx, panel);
+  wirePanelDrag(panel);
+}
+
+function closePluginUi(idx?: number): void {
+  if (idx == null) {
+    for (const i of Array.from(openPanels.keys())) closePluginUi(i);
+    return;
+  }
+  const panel = openPanels.get(idx);
+  if (!panel) return;
+  const slot = slots[idx];
+  const closeInterface = slot?.effect
+    ? (slot.effect as { closeInterface?: () => void }).closeInterface
+    : undefined;
+  if (typeof closeInterface === 'function') {
+    try {
+      closeInterface();
+    } catch {
+      // Best-effort — plugin may already be torn down.
+    }
+  }
+  panel.remove();
+  openPanels.delete(idx);
+  proxyResolvers.delete(idx);
+}
+
+function buildPluginPanel(
+  idx: number,
+  label: string,
+  iframe: HTMLIFrameElement
+): HTMLElement {
+  const panel = document.createElement('div');
+  panel.className = 'pluginPanel';
+  panel.dataset.slotIndex = String(idx);
+
+  const header = document.createElement('header');
+  header.className = 'pluginPanelHead';
+
+  const title = document.createElement('span');
+  title.className = 'pluginPanelTitle';
+  title.textContent = `${label} · slot ${idx + 1}`;
+  header.appendChild(title);
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'pluginPanelClose';
+  close.textContent = '×';
+  close.setAttribute('aria-label', 'Close plugin UI');
+  close.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closePluginUi(idx);
+  });
+  header.appendChild(close);
+
+  const body = document.createElement('div');
+  body.className = 'pluginPanelBody';
+  body.appendChild(iframe);
+
+  panel.appendChild(header);
+  panel.appendChild(body);
+  panel.addEventListener('pointerdown', () => bringPanelToFront(panel));
+
+  return panel;
+}
+
+function positionPanel(panel: HTMLElement): void {
+  const offset = (panelCascade % 6) * 28;
+  panel.style.left = `${24 + offset}px`;
+  panel.style.top = `${24 + offset}px`;
+  panelCascade += 1;
+}
+
+function bringPanelToFront(panel: HTMLElement): void {
+  const container = panel.parentElement;
+  if (container && container.lastElementChild !== panel) {
+    container.appendChild(panel);
+  }
+}
+
+function wirePanelDrag(panel: HTMLElement): void {
+  const header = panel.querySelector<HTMLElement>('.pluginPanelHead');
+  if (!header) return;
+
+  let dragging = false;
+  let startX = 0;
+  let startY = 0;
+  let startLeft = 0;
+  let startTop = 0;
+
+  header.addEventListener('pointerdown', (e) => {
+    if (
+      e.target instanceof Element &&
+      e.target.closest('.pluginPanelClose')
+    ) {
+      return;
+    }
+    dragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    const rect = panel.getBoundingClientRect();
+    startLeft = rect.left;
+    startTop = rect.top;
+    try {
+      header.setPointerCapture(e.pointerId);
+    } catch {
+      // Some browsers reject if the pointer isn't active — ignore.
+    }
+    bringPanelToFront(panel);
+  });
+
+  header.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    panel.style.left = `${Math.max(0, startLeft + dx)}px`;
+    panel.style.top = `${Math.max(0, startTop + dy)}px`;
+  });
+
+  const end = (e: PointerEvent): void => {
+    if (!dragging) return;
+    dragging = false;
+    try {
+      header.releasePointerCapture(e.pointerId);
+    } catch {
+      // Pointer already released — ignore.
+    }
+  };
+  header.addEventListener('pointerup', end);
+  header.addEventListener('pointercancel', end);
+}
+
+async function registerPluginProxy(): Promise<void> {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    await navigator.serviceWorker.register('/plugin-proxy-sw.js', {
+      scope: '/plugin-proxy/'
+    });
+    await navigator.serviceWorker.ready;
+  } catch (err) {
+    console.warn('[wclap-host] plugin-proxy SW registration failed', err);
+    return;
+  }
+
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    const data = event.data as
+      | { type: string; id: number; path: string }
+      | undefined;
+    if (!data || data.type !== 'plugin-proxy-request') return;
+    // The top-level page registered the SW but lives outside the SW scope,
+    // so `navigator.serviceWorker.controller` is null. Reply via the source
+    // of the message (the SW itself), which works regardless of control.
+    const source = event.source;
+    if (!(source instanceof ServiceWorker)) return;
+    void respondProxy(source, data.id, data.path);
+  });
+}
+
+async function respondProxy(
+  source: ServiceWorker,
+  id: number,
+  path: string
+): Promise<void> {
+  const body = await lookupProxyFile(path);
+  const mime = body ? mimeForPath(path) : undefined;
+  source.postMessage({ type: 'plugin-proxy-response', id, body, mime });
+}
+
+async function lookupProxyFile(path: string): Promise<ArrayBuffer | null> {
+  // Any active slot can serve a path; whichever has it wins. In practice the
+  // path's `/plugin/<hash>/...` prefix is unique per loaded plugin, so this
+  // doesn't collide across slots.
+  for (const [, resolver] of proxyResolvers) {
+    try {
+      const buf = await resolver(path);
+      if (buf) return buf;
+    } catch {
+      // Try next slot.
+    }
+  }
+  return null;
+}
+
+const MIME_TABLE: Record<string, string> = {
+  html: 'text/html; charset=utf-8',
+  htm: 'text/html; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  mjs: 'text/javascript; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  svg: 'image/svg+xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  woff: 'font/woff',
+  woff2: 'font/woff2',
+  wasm: 'application/wasm',
+  txt: 'text/plain; charset=utf-8'
+};
+
+function mimeForPath(path: string): string {
+  const m = /\.([a-z0-9]+)(?:[?#].*)?$/i.exec(path);
+  const ext = m?.[1]?.toLowerCase() ?? '';
+  return MIME_TABLE[ext] ?? 'application/octet-stream';
 }
 
 const rmsScratch = new Float32Array(1024);

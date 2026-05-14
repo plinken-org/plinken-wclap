@@ -27,6 +27,10 @@ export interface ClapEffectAudioNode extends AudioWorkletNode {
   performance?(): Promise<{ block: number; wasm: number; js: number }>;
   openInterface?: unknown;
   closeInterface?: () => void;
+  /** Route CLAP events (MIDI/note) from this node into another effect node. */
+  connectEvents?(other: ClapEffectAudioNode): unknown;
+  /** Disconnect previously-routed CLAP events. Pass null to drop all. */
+  disconnectEvents?(other: ClapEffectAudioNode | null): unknown;
 }
 
 export interface ClapAudioNodeOptions {

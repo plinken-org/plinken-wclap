@@ -4,12 +4,13 @@
 // memory"; on others it succeeds the first time but the reservation
 // accumulates across reloads until the browser refuses.
 //
-// 32 KiB pages × 1024 = 64 MiB is plenty for any plugin in the sample
-// bundle (and far more than typical audio plugins ever touch). Cap the
-// maximum globally before the upstream module runs — re-importing this
-// file is a no-op.
+// 64 KiB pages × 256 = 16 MiB is well above what the sample bundle plugins
+// actually use. Five slots × ~2 memories each × 16 MiB ≈ 160 MiB of virtual
+// address space, leaving headroom on constrained mobile browsers where the
+// upstream 2 GiB reservation tipped us over. Re-importing this file is a
+// no-op.
 
-const MAX_PAGES = 1024;
+const MAX_PAGES = 256;
 
 declare global {
   interface MemoryConstructor {

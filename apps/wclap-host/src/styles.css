@@ -201,6 +201,39 @@ h1 {
   font-weight: 400;
   letter-spacing: 0.02em;
 }
+.slotCycle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+.slotCycleBtn {
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+.slotCycleBtn:hover {
+  border-color: var(--accent-deep);
+  color: var(--accent);
+}
+.slotCycleCount {
+  min-width: 2.1rem;
+  text-align: center;
+}
+
 .slotDelete {
   font: inherit;
   font-family: var(--font-mono);
@@ -262,6 +295,100 @@ h1 {
 .shelfChipHint {
   margin-left: 0.4rem;
   color: var(--text-dim);
+}
+
+/* Plugin UI panels — floating, non-modal, draggable windows. The container
+ * covers the viewport but is pointer-events:none so it doesn't block clicks
+ * on the rack / Play below. Each panel re-enables pointer events on itself.
+ * Multiple panels can coexist; their order is set by appendChild + manual
+ * `bringToFront`. */
+.pluginPanels {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  pointer-events: none;
+}
+.pluginPanel {
+  position: absolute;
+  pointer-events: auto;
+  width: clamp(20rem, 90vw, 40rem);
+  height: clamp(18rem, 60vh, 30rem);
+  background: var(--bg-elev);
+  border: 1px solid var(--accent-deep);
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.pluginPanelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg);
+  cursor: grab;
+  touch-action: none; /* let pointer drag take over on touch */
+  user-select: none;
+}
+.pluginPanelHead:active {
+  cursor: grabbing;
+}
+.pluginPanelTitle {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-right: 0.5rem;
+}
+.pluginPanelClose {
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  line-height: 1;
+  width: 1.8rem;
+  height: 1.8rem;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.pluginPanelClose:hover {
+  border-color: var(--accent-warn);
+  color: var(--accent-warn);
+  background: rgba(217, 122, 91, 0.10);
+}
+.pluginPanelBody {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  background: #fff;
+}
+.pluginPanelBody iframe {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* Make the slot's plugin label feel actionable when there's a UI to open. */
+.rackSlot.occupied .slotLabel {
+  cursor: pointer;
+}
+.rackSlot.occupied.hasUi .slotLabel::after {
+  content: ' · ui';
+  color: var(--accent-purple);
+  font-family: var(--font-mono);
+  font-size: 0.75em;
+  letter-spacing: 0.06em;
 }
 
 /* Drag ghost shown during touch drag. Position is set imperatively. */
