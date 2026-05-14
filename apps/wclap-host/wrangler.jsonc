@@ -8,14 +8,14 @@
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "dist",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    "run_worker_first": true
   },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
-  }
-  // Custom domain — uncomment and add the zone to this CF account when ready:
-  //   "routes": [
-  //     { "pattern": "wclap.plinken.org", "custom_domain": true }
-  //   ]
+  },
+  "routes": [
+    { "pattern": "wclap.plinken.org", "custom_domain": true }
+  ]
 }
