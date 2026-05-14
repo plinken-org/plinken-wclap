@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WCLAP host — plinken.org</title>
+    <meta
+      name="description"
+      content="Load a WCLAP (CLAP plugin compiled to wasm32) in the browser and hear a test tone routed through it. Proof-of-concept for the WebCLAP project, built on plinken.org."
+    />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <a class="logo" href="https://plinken.org">
+          <span class="logoMark" aria-hidden="true">◐</span>
+          <span class="logoText">PLINKEN<span class="logoTld">.ORG</span></span>
+        </a>
+        <div class="badge">WCLAP HOST · POC</div>
+        <h1>Load a WCLAP plugin.</h1>
+        <p class="lede">
+          Drop a <code>.wclap</code> bundle below. The page will compile it,
+          start an <code>AudioWorklet</code>, and pipe a 440&nbsp;Hz stereo test
+          tone through the plugin so you can hear it work end&#8209;to&#8209;end
+          in the browser. Built on
+          <a
+            href="https://github.com/WebCLAP/wclap-host-js"
+            target="_blank"
+            rel="noreferrer noopener"
+            >wclap-host-js</a
+          >.
+        </p>
+      </header>
+
+      <section
+        id="drop"
+        class="drop"
+        role="button"
+        tabindex="0"
+        aria-label="Drop a .wclap file here, or click to choose one"
+      >
+        <div class="dropInner">
+          <div class="dropHeadline">Drop a <code>.wclap</code> here</div>
+          <div class="dropSub">or click to choose a file</div>
+          <input
+            id="fileInput"
+            type="file"
+            accept=".wclap,application/gzip,application/x-gzip,application/octet-stream"
+            hidden
+          />
+        </div>
+      </section>
+
+      <section class="status" aria-live="polite">
+        <dl class="statusGrid">
+          <dt>Status</dt>
+          <dd id="statusLabel">Idle — waiting for a plugin.</dd>
+
+          <dt>Plugin</dt>
+          <dd id="pluginLabel">—</dd>
+
+          <dt>Sample rate</dt>
+          <dd id="sampleRateLabel">—</dd>
+
+          <dt>Cross-origin isolated</dt>
+          <dd id="coiLabel">—</dd>
+        </dl>
+
+        <div class="controls">
+          <button id="playBtn" type="button" disabled>▶ Play test tone</button>
+          <button id="stopBtn" type="button" disabled>■ Stop</button>
+        </div>
+
+        <div class="meters" aria-hidden="true">
+          <div class="meter">
+            <span class="meterLabel">L</span>
+            <div class="meterBar"><div id="meterL" class="meterFill"></div></div>
+          </div>
+          <div class="meter">
+            <span class="meterLabel">R</span>
+            <div class="meterBar"><div id="meterR" class="meterFill"></div></div>
+          </div>
+        </div>
+
+        <pre id="errorBox" class="error" hidden></pre>
+      </section>
+
+      <footer class="footer">
+        <a href="https://plinken.org">plinken.org</a>
+        <span class="sep">·</span>
+        <a
+          href="https://github.com/taluvi-dev/plinken-org/tree/main/apps/wclap-host"
+          target="_blank"
+          rel="noreferrer noopener"
+          >source</a
+        >
+        <span class="sep">·</span>
+        <a href="https://github.com/WebCLAP" target="_blank" rel="noreferrer noopener"
+          >WebCLAP</a
+        >
+      </footer>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+{
+  // PUBLIC REPO — do not add account_id, secrets, or env values here.
+  // Use `wrangler secret put <NAME>` or the Cloudflare dashboard for credentials.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "plinken-org-wclap-host",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-05-13",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "dist",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+  // Custom domain — uncomment and add the zone to this CF account when ready:
+  //   "routes": [
+  //     { "pattern": "wclap.plinken.org", "custom_domain": true }
+  //   ]
+}
