@@ -5,8 +5,9 @@
   "type": "module",
   "description": "Auto-Pan WCLAP plugin (com.plinken)",
   "scripts": {
-    "build": "mkdir -p dist && asc assembly/index.ts --config asconfig.json --target release",
-    "build:debug": "mkdir -p dist && asc assembly/index.ts --config asconfig.json --target debug"
+    "build:wasm": "mkdir -p dist && asc assembly/index.ts --config asconfig.json --target release",
+    "build": "pnpm run build:wasm && node ../../../scripts/bundle-wclap.mjs .",
+    "build:debug": "mkdir -p dist && asc assembly/index.ts --config asconfig.json --target debug && node ../../../scripts/bundle-wclap.mjs ."
   },
   "dependencies": {
     "as-clap": "github:geraintluff/as-clap",

@@ -9,19 +9,19 @@
   "license": "MIT",
   "homepage": "https://plinken.org",
   "source": "assembly/",
-  "artifact": "dist/auto-pan.wclap.wasm",
-  "format": "wasm",
-  "has_ui": false,
+  "artifact": "dist/auto-pan.wclap.tar.gz",
+  "format": "tar.gz",
+  "has_ui": true,
   "ui": {
     "compact_size":  { "width": 260, "height": 56 },
-    "expanded_size": { "width": 360, "height": 220 }
+    "expanded_size": { "width": 200, "height": 110 }
   },
   "plugins": [
     {
       "id": "com.plinken.auto-pan",
       "name": "Auto-Pan",
       "features": ["audio-effect", "utility"],
-      "has_ui": false
+      "has_ui": true
     }
   ]
 }

@@ -1,11 +1,11 @@
 {
   "manifest_version": 1,
-  "generatedAt": "2026-05-14T09:05:41.465Z",
+  "generatedAt": "2026-05-14T09:30:32.625Z",
   "items": [
     {
       "id": "com.plinken.auto-pan",
       "label": "Plinken: Auto-Pan",
-      "url": "/wclap/com.plinken.auto-pan.wclap.wasm",
+      "url": "/wclap/com.plinken.auto-pan.wclap.tar.gz",
       "vendor": "Plinken",
       "license": "MIT",
       "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/auto-pan",
@@ -16,15 +16,15 @@
         "utility"
       ],
       "homepage": "https://plinken.org",
-      "has_ui": false,
+      "has_ui": true,
       "ui": {
         "compact_size": {
           "width": 260,
           "height": 56
         },
         "expanded_size": {
-          "width": 360,
-          "height": 220
+          "width": 200,
+          "height": 110
         }
       },
       "plugins": [
@@ -35,7 +35,7 @@
             "audio-effect",
             "utility"
           ],
-          "has_ui": false
+          "has_ui": true
         }
       ]
     },

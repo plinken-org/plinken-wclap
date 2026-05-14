@@ -18,8 +18,18 @@ export default class ClapAudioNode {
 		wclapOptions.url = new URL(wclapOptions.url, document.baseURI).href;
 
 		// Load configs and start host/WCLAP
+		// PATCH (plinken-org): `?backend=rust` swaps the live C++ `host.wasm`
+		// for the in-progress Rust build at `host-rust.wasm`. Default stays on
+		// the C++ host so dropping a plugin keeps working while the Rust port
+		// catches up. Remove this once the Rust host passes the full M1 surface.
 		if (!ClapAudioNode.#hostConfigPromise) {
-			ClapAudioNode.#hostConfigPromise = getHost(new URL("./host.wasm", import.meta.url).href);
+			let hostWasmName = "host.wasm";
+			try {
+				if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('backend') === 'rust') {
+					hostWasmName = "host-rust.wasm";
+				}
+			} catch (_) { /* no-op: location unavailable in some contexts */ }
+			ClapAudioNode.#hostConfigPromise = getHost(new URL(`./${hostWasmName}`, import.meta.url).href);
 		}
 		this.#ready = (async (hostConfigPromise, wclapConfigPromise) => {
 			// We *could* have a common host across all WCLAP modules, but then we'd need to figure out when to de-register them

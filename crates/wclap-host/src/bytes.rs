@@ -46,6 +46,14 @@ pub extern "C" fn getBytesLength(handle: u32) -> u32 {
     buf.len() as u32
 }
 
+/// Borrowed view of a bytes-pool buffer. Used by `createPlugin` to read the
+/// plugin-id JS wrote via `encodeString` (resizeBytes + DataView). Borrow
+/// must end before the next bytes-pool mutation in this thread; the wasm
+/// single-thread assumption makes that automatic.
+pub(crate) fn view(handle: u32) -> &'static [u8] {
+    pool().map.get(&handle).expect("bad bytes handle").as_slice()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

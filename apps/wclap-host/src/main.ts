@@ -414,6 +414,14 @@ async function loadIntoSlot(
     const label =
       descriptor.name +
       (descriptor.vendor ? ` · ${descriptor.vendor}` : '');
+
+    // Plugins that follow CLAP semantics call `host.state.mark_dirty()` on
+    // every parameter change; the runtime forwards that to main as a
+    // `state_mark_dirty` event. We don't persist plugin state yet, so no-op
+    // the handler — without it `clap-audionode` logs an "unhandled event"
+    // for every pot tweak.
+    const effectEvents = (effect as { events?: Record<string, unknown> }).events;
+    if (effectEvents) effectEvents.state_mark_dirty = () => {};
     const hasUi =
       typeof (effect as { openInterface?: unknown }).openInterface ===
       'function';
@@ -922,9 +930,7 @@ function buildPluginPanel(
   const title = document.createElement('span');
   title.className = 'pluginPanelTitle';
   title.textContent =
-    mode === 'compact'
-      ? `${label} · ${idx + 1} · strip`
-      : `${label} · slot ${idx + 1}`;
+    mode === 'compact' ? label : `${label} · slot ${idx + 1}`;
   header.appendChild(title);
 
   const close = document.createElement('button');

@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Auto-Pan</title>
+<style>
+  :root {
+    --bg: #191919;
+    --bg-elev: #1f1f1f;
+    --bg-deep: #0d0d0d;
+    --text: #e8e8e8;
+    --text-dim: #5a5a5a;
+    --text-muted: #c2c2c2;
+    --accent: #8691da;
+    --accent-deep: #6773be;
+    --accent-purple: #925db3;
+    --border-soft: #373737;
+
+    --pot-size: 64px;
+    --pot-track: 4px;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Unbounded', ui-sans-serif, system-ui, -apple-system, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+    overflow: hidden;
+  }
+  .root {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    align-items: center;
+  }
+  .title {
+    font-family: 'Unbounded', ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.78rem;
+    letter-spacing: 0.18em;
+    color: var(--accent-purple);
+    text-transform: uppercase;
+  }
+  .pots {
+    display: flex;
+    align-items: center;
+    justify-content: space-evenly;
+  }
+  .pot {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    touch-action: none;
+  }
+  .pot-dial {
+    position: relative;
+    width: var(--pot-size);
+    height: var(--pot-size);
+    cursor: ns-resize;
+  }
+  .pot-dial svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    overflow: visible;
+  }
+  .pot-track {
+    fill: none;
+    stroke: var(--bg-deep);
+    stroke-width: var(--pot-track);
+    stroke-linecap: round;
+  }
+  .pot-fill {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: var(--pot-track);
+    stroke-linecap: round;
+    transition: stroke 0.12s;
+  }
+  .pot.dragging .pot-fill { stroke: var(--accent-purple); }
+  .pot-needle {
+    stroke: var(--text);
+    stroke-width: 2px;
+    stroke-linecap: round;
+  }
+  .pot-readout {
+    font-family: 'Courier Prime', ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 0.72rem;
+    color: var(--accent);
+    line-height: 1;
+    text-align: center;
+  }
+  .pot-label {
+    font-family: 'Unbounded', ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.6rem;
+    letter-spacing: 0.14em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    line-height: 1;
+  }
+
+  /* compact strip (~260x56) — title hard-left, pots take the rest. */
+  .root.compact {
+    grid-template-columns: max-content 1fr;
+    gap: 8px;
+    padding: 0 10px;
+    --pot-size: 36px;
+    --pot-track: 3px;
+  }
+  .root.compact .title { font-size: 0.65rem; }
+  .root.compact .pots { gap: 14px; }
+  .root.compact .pot { flex-direction: row; gap: 0; }
+  /* Strip view: dial only — the host already labels the row. */
+  .root.compact .pot-stack { display: none; }
+
+  /* expanded — compact rectangle: title on row 1, pots on row 2. */
+  .root.expanded {
+    grid-template-rows: auto auto;
+    justify-content: center;
+    align-content: center;
+    padding: 8px 14px;
+    gap: 6px;
+    --pot-size: 56px;
+    --pot-track: 4px;
+  }
+  .root.expanded .title { font-size: 0.78rem; text-align: center; }
+  .root.expanded .pots { gap: 24px; }
+  .root.expanded .pot { gap: 4px; }
+  .root.expanded .pot-stack { display: flex; flex-direction: column; gap: 1px; align-items: center; }
+  .root.expanded .pot-readout { font-size: 0.7rem; }
+  .root.expanded .pot-label { font-size: 0.55rem; }
+</style>
+</head>
+<body>
+<div class="root expanded" id="root">
+  <div class="title">Auto-Pan</div>
+  <div class="pots">
+    <div class="pot" data-pot="speed" data-id="4097" data-min="0.1" data-max="20" data-default="5" data-unit="Hz" data-log="1">
+      <div class="pot-dial">
+        <svg viewBox="-50 -50 100 100" aria-hidden="true">
+          <path class="pot-track" d=""></path>
+          <path class="pot-fill" d=""></path>
+          <line class="pot-needle" x1="0" y1="0" x2="0" y2="-32"></line>
+        </svg>
+      </div>
+      <div class="pot-stack">
+        <div class="pot-readout" data-readout></div>
+        <div class="pot-label">Speed</div>
+      </div>
+    </div>
+    <div class="pot" data-pot="wet" data-id="4098" data-min="0" data-max="1" data-default="1" data-unit="%" data-log="0" data-scale="100">
+      <div class="pot-dial">
+        <svg viewBox="-50 -50 100 100" aria-hidden="true">
+          <path class="pot-track" d=""></path>
+          <path class="pot-fill" d=""></path>
+          <line class="pot-needle" x1="0" y1="0" x2="0" y2="-32"></line>
+        </svg>
+      </div>
+      <div class="pot-stack">
+        <div class="pot-readout" data-readout></div>
+        <div class="pot-label">Wet/Dry</div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  // --- arc geometry --------------------------------------------------------
+  // The pot sweeps from -135° (bottom-left) to +135° (bottom-right), 270° of
+  // travel. Both the track (full sweep) and fill (zero → current value) are
+  // SVG arcs in a 100×100 viewBox; radius = 40 leaves room for the readout.
+  const ARC_START_DEG = -135;
+  const ARC_END_DEG = 135;
+  const ARC_R = 40;
+  function polar(deg, r) {
+    const a = (deg - 90) * Math.PI / 180;
+    return [Math.cos(a) * r, Math.sin(a) * r];
+  }
+  function arcPath(fromDeg, toDeg, r) {
+    const [x1, y1] = polar(fromDeg, r);
+    const [x2, y2] = polar(toDeg, r);
+    const large = Math.abs(toDeg - fromDeg) > 180 ? 1 : 0;
+    const sweep = toDeg > fromDeg ? 1 : 0;
+    return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} ${sweep} ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+  }
+  const TRACK_PATH = arcPath(ARC_START_DEG, ARC_END_DEG, ARC_R);
+
+  // --- pot state -----------------------------------------------------------
+  const pots = Array.from(document.querySelectorAll('.pot')).map(el => {
+    const id = Number(el.dataset.id);
+    const min = Number(el.dataset.min);
+    const max = Number(el.dataset.max);
+    const def = Number(el.dataset.default);
+    const isLog = el.dataset.log === '1';
+    const unit = el.dataset.unit || '';
+    const scale = Number(el.dataset.scale || '1');
+    const trackEl = el.querySelector('.pot-track');
+    const fillEl = el.querySelector('.pot-fill');
+    const needleEl = el.querySelector('.pot-needle');
+    const readoutEl = el.querySelector('[data-readout]');
+    trackEl.setAttribute('d', TRACK_PATH);
+    return { el, id, min, max, def, isLog, unit, scale, trackEl, fillEl, needleEl, readoutEl, value: def };
+  });
+  const potById = new Map(pots.map(p => [p.id, p]));
+
+  function valueToNorm(p, v) {
+    if (p.isLog) {
+      const lmin = Math.log(p.min);
+      const lmax = Math.log(p.max);
+      return (Math.log(v) - lmin) / (lmax - lmin);
+    }
+    return (v - p.min) / (p.max - p.min);
+  }
+  function normToValue(p, n) {
+    n = Math.max(0, Math.min(1, n));
+    if (p.isLog) {
+      const lmin = Math.log(p.min);
+      const lmax = Math.log(p.max);
+      return Math.exp(lmin + n * (lmax - lmin));
+    }
+    return p.min + n * (p.max - p.min);
+  }
+
+  function format(p) {
+    if (p.unit === '%') return `${Math.round(p.value * 100)} %`;
+    if (p.unit === 'Hz') {
+      const v = p.value;
+      return v >= 10 ? `${v.toFixed(1)} Hz` : `${v.toFixed(2)} Hz`;
+    }
+    return String(p.value);
+  }
+
+  function render(p) {
+    const norm = Math.max(0, Math.min(1, valueToNorm(p, p.value)));
+    const deg = ARC_START_DEG + norm * (ARC_END_DEG - ARC_START_DEG);
+    p.fillEl.setAttribute('d', arcPath(ARC_START_DEG, deg, ARC_R));
+    p.needleEl.setAttribute('transform', `rotate(${deg.toFixed(2)})`);
+    p.readoutEl.textContent = format(p);
+  }
+  pots.forEach(render);
+
+  // --- input ---------------------------------------------------------------
+  // Drag along Y (240 px = full range), wheel to nudge by 2 % steps, double
+  // click to snap back to default. We don't pop a text input on click — the
+  // host's expanded panel is for "show me the value", precise typing happens
+  // through automation lanes upstream.
+  function setValue(p, v, fromUI) {
+    v = Math.max(p.min, Math.min(p.max, v));
+    if (v === p.value) return;
+    p.value = v;
+    render(p);
+    if (fromUI) sendSet(p.id, v);
+  }
+  function nudge(p, delta) {
+    const n = valueToNorm(p, p.value);
+    setValue(p, normToValue(p, n + delta), true);
+  }
+
+  pots.forEach(p => {
+    let dragStartY = 0;
+    let dragStartNorm = 0;
+    let pointerId = null;
+    const dial = p.el.querySelector('.pot-dial');
+    dial.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      pointerId = e.pointerId;
+      dial.setPointerCapture(pointerId);
+      p.el.classList.add('dragging');
+      dragStartY = e.clientY;
+      dragStartNorm = valueToNorm(p, p.value);
+    });
+    dial.addEventListener('pointermove', e => {
+      if (pointerId === null) return;
+      const dy = e.clientY - dragStartY;
+      // Fine-tune mode while shift is held: 4× slower.
+      const range = e.shiftKey ? 960 : 240;
+      const n = dragStartNorm - dy / range;
+      setValue(p, normToValue(p, n), true);
+    });
+    function endDrag() {
+      if (pointerId !== null) {
+        try { dial.releasePointerCapture(pointerId); } catch {}
+        pointerId = null;
+      }
+      p.el.classList.remove('dragging');
+    }
+    dial.addEventListener('pointerup', endDrag);
+    dial.addEventListener('pointercancel', endDrag);
+    dial.addEventListener('dblclick', e => {
+      e.preventDefault();
+      setValue(p, p.def, true);
+    });
+    dial.addEventListener('wheel', e => {
+      e.preventDefault();
+      nudge(p, -Math.sign(e.deltaY) * 0.02);
+    }, { passive: false });
+  });
+
+  // --- responsive size class ----------------------------------------------
+  // The host iframes us at either compact_size (260×56) or expanded_size
+  // (360×220) per the manifest. Decide which CSS layout to use by width.
+  function applyLayout() {
+    const root = document.getElementById('root');
+    const compact = window.innerWidth < 300 || window.innerHeight < 90;
+    root.classList.toggle('compact', compact);
+    root.classList.toggle('expanded', !compact);
+  }
+  applyLayout();
+  window.addEventListener('resize', applyLayout);
+
+  // --- CBOR (minimal) ------------------------------------------------------
+  // Just the shapes the plugin sends/expects. Anything richer would pull in a
+  // full CBOR library — we don't need one.
+
+  function encodeReady() {
+    // text(5) "ready"
+    return new Uint8Array([0x65, 0x72, 0x65, 0x61, 0x64, 0x79]).buffer;
+  }
+
+  // { "set": [<u32 id>, <f64 value>] } — 20 bytes, fixed layout.
+  function encodeSet(id, value) {
+    const buf = new ArrayBuffer(20);
+    const view = new DataView(buf);
+    view.setUint8(0, 0xa1);              // map(1)
+    view.setUint8(1, 0x63);              // text(3) "set"
+    view.setUint8(2, 0x73);
+    view.setUint8(3, 0x65);
+    view.setUint8(4, 0x74);
+    view.setUint8(5, 0x82);              // array(2)
+    view.setUint8(6, 0x1a);              // u32
+    view.setUint32(7, id, false);
+    view.setUint8(11, 0xfb);             // f64
+    view.setFloat64(12, value, false);
+    return buf;
+  }
+
+  // Decode `{ "params": { <u32>: <f64>, ... } }`. Returns a Map<id, value>
+  // or null if the buffer isn't this shape.
+  function decodeParamsSnapshot(ab) {
+    const view = new DataView(ab);
+    let p = 0;
+    if (view.byteLength < 2) return null;
+    if (view.getUint8(p++) !== 0xa1) return null;
+    // expect text(6) "params"
+    if (view.getUint8(p++) !== 0x66) return null;
+    if (view.byteLength < p + 6) return null;
+    if (
+      view.getUint8(p) !== 0x70 ||
+      view.getUint8(p + 1) !== 0x61 ||
+      view.getUint8(p + 2) !== 0x72 ||
+      view.getUint8(p + 3) !== 0x61 ||
+      view.getUint8(p + 4) !== 0x6d ||
+      view.getUint8(p + 5) !== 0x73
+    ) return null;
+    p += 6;
+    const head = view.getUint8(p++);
+    if ((head & 0xe0) !== 0xa0) return null; // major type 5 (map)
+    let count = head & 0x1f;
+    // We only handle short counts (<= 23 entries); plenty for our 2 params.
+    if (count > 23) return null;
+    const out = new Map();
+    for (let i = 0; i < count; i++) {
+      if (view.getUint8(p++) !== 0x1a) return null;
+      const key = view.getUint32(p, false); p += 4;
+      if (view.getUint8(p++) !== 0xfb) return null;
+      const val = view.getFloat64(p, false); p += 8;
+      out.set(key, val);
+    }
+    return out;
+  }
+
+  // --- transport -----------------------------------------------------------
+  function sendSet(id, value) {
+    window.parent.postMessage(encodeSet(id, value), '*');
+  }
+
+  window.addEventListener('message', e => {
+    const data = e.data;
+    if (!(data instanceof ArrayBuffer)) return;
+    const params = decodeParamsSnapshot(data);
+    if (!params) return;
+    params.forEach((value, id) => {
+      const p = potById.get(id);
+      if (!p) return;
+      // Don't echo a set back to the plugin — this is authoritative state.
+      p.value = Math.max(p.min, Math.min(p.max, value));
+      render(p);
+    });
+  });
+
+  // Tell the plugin we're ready; it replies with the snapshot. Posting from
+  // a microtask so the parent has time to wire up its forward listener.
+  Promise.resolve().then(() => {
+    window.parent.postMessage(encodeReady(), '*');
+  });
+</script>
+</body>
+</html>

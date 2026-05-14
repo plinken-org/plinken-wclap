@@ -1,14 +1,23 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-// Per-hosted-plugin bookkeeping. At M1 this only carries the wclapInstance
-// handle (used as `handle` in every `_wclapInstance.*` call) and a slot for
-// plugins created later in steps 4–7. Host-stub registry indices and the
-// clap_host_t scratch area land here at step 4.
-#[allow(dead_code)] // fields consumed starting at step 4 (`createPlugin`).
+// Per-hosted-plugin bookkeeping. Carries the wclapInstance handle (used as
+// `handle` in every `_wclapInstance.*` call), plugin handles created via
+// `createPlugin`, and — once the first plugin is built — the four host-stub
+// table indices `registerHost32` returned. Stubs are registered lazily so
+// hosting zero plugins doesn't grow the plugin's function table.
 pub(crate) struct Hosted {
     pub(crate) instance_handle: u32,
     pub(crate) plugins: Vec<u32>,
+    pub(crate) stubs: Option<HostStubIndices>,
+}
+
+#[derive(Copy, Clone)]
+pub(crate) struct HostStubIndices {
+    pub(crate) get_extension: u32,
+    pub(crate) request_restart: u32,
+    pub(crate) request_process: u32,
+    pub(crate) request_callback: u32,
 }
 
 pub(crate) struct HostedPool {
@@ -40,6 +49,7 @@ pub extern "C" fn makeHosted(wclap_instance_ptr: u32) -> u32 {
         Hosted {
             instance_handle: wclap_instance_ptr,
             plugins: Vec::new(),
+            stubs: None,
         },
     );
     id
