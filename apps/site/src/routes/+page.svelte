@@ -124,6 +124,35 @@
         <li><span>UPSTREAM</span><span>WebCLAP · wclap-host-js · wclap-bridge</span></li>
       </ul>
     </section>
+
+    <section class="registry">
+      <div class="stackHeader">REGISTRY</div>
+      <p class="registryLead">
+        Every plugin in this monorepo is exposed at one CORS-open
+        endpoint — any host UI, CLI, or upcoming MCP server can fetch the
+        catalog and pull the bundled artifacts without auth.
+      </p>
+      <dl class="endpoints">
+        <dt>Catalog</dt>
+        <dd><a href="/shelf.json">GET plinken.org/shelf.json</a></dd>
+        <dt>Artifact</dt>
+        <dd>
+          <code>GET plinken.org/wclap/&lt;plugin-id&gt;.wclap.wasm</code>
+        </dd>
+        <dt>Source</dt>
+        <dd>
+          <a
+            href="https://github.com/taluvi-dev/plinken-org/tree/main/plugins"
+            target="_blank"
+            rel="noreferrer noopener"
+            >github.com/taluvi-dev/plinken-org/plugins</a
+          >
+        </dd>
+      </dl>
+      <pre class="snippet"><code
+          >$ curl https://plinken.org/shelf.json | jq '.items[].id'</code
+        ></pre>
+    </section>
   </main>
 
   <footer>
@@ -394,6 +423,57 @@
   .stack li span:first-child {
     color: var(--accent);
     letter-spacing: 0.08em;
+  }
+
+  /* ─── registry ────────────────────────────────────── */
+  .registry {
+    margin: 4rem 0 2rem;
+    border-top: 1px solid var(--border-soft);
+    padding-top: 2.5rem;
+  }
+  .registryLead {
+    font-family: var(--font-sans);
+    font-size: 1rem;
+    color: var(--text-muted);
+    max-width: 44rem;
+    margin: 0 0 1.5rem;
+    line-height: 1.65;
+  }
+  .endpoints {
+    margin: 0 0 1.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.88rem;
+    display: grid;
+    grid-template-columns: 6rem 1fr;
+    gap: 0.5rem 1rem;
+  }
+  .endpoints dt {
+    color: var(--accent);
+    letter-spacing: 0.08em;
+  }
+  .endpoints dd {
+    margin: 0;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+  }
+  .endpoints code,
+  .endpoints a {
+    color: var(--text);
+  }
+  .endpoints a:hover {
+    color: var(--accent);
+  }
+  .snippet {
+    margin: 0;
+    padding: 0.85rem 1rem;
+    background: var(--bg-elev);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--accent);
+    overflow-x: auto;
+    white-space: pre;
   }
 
   /* ─── footer ──────────────────────────────────────── */
