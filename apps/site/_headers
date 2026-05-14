@@ -1,0 +1,14 @@
+# Plugin registry endpoints — let any origin fetch the catalog and the
+# bundled artifacts. CORP: cross-origin is required for a cross-origin
+# isolated host (like wclap.plinken.org) to load the wasm/tar.gz under
+# COEP: require-corp.
+
+/shelf.json
+  Access-Control-Allow-Origin: *
+  Cross-Origin-Resource-Policy: cross-origin
+  Cache-Control: public, max-age=300, s-maxage=300
+
+/wclap/*
+  Access-Control-Allow-Origin: *
+  Cross-Origin-Resource-Policy: cross-origin
+  Cache-Control: public, max-age=3600, s-maxage=3600
