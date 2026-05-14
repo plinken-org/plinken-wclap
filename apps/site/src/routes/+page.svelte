@@ -52,11 +52,19 @@
       <div class="actions">
         <a
           class="btn primary"
+          href="https://wclap.plinken.org"
+          target="_blank"
+          rel="noreferrer noopener"
+        >
+          → TRY THE HOST
+        </a>
+        <a
+          class="btn ghost"
           href="https://github.com/taluvi-dev/plinken-org"
           target="_blank"
           rel="noreferrer noopener"
         >
-          → GITHUB.COM/TALUVI-DEV/PLINKEN-ORG
+          → GITHUB
         </a>
         <a
           class="btn ghost"
@@ -64,7 +72,7 @@
           target="_blank"
           rel="noreferrer noopener"
         >
-          → WEBCLAP PROJECT
+          → WEBCLAP
         </a>
       </div>
 
