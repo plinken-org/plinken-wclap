@@ -28,8 +28,66 @@ const stripGzipEncodingForTarGz = {
   }
 };
 
+// Mirrors the Cloudflare Worker's `/r2-proxy?u=<url>` route so URL-loaded
+// shelf entries work in `pnpm dev` without deploying.
+const r2ProxyDevMiddleware = {
+  name: 'wclap-r2-proxy-dev',
+  configureServer(server: import('vite').ViteDevServer) {
+    server.middlewares.use('/r2-proxy', async (req, res) => {
+      try {
+        const url = new URL(req.url ?? '', 'http://localhost');
+        const target = url.searchParams.get('u');
+        if (!target) {
+          res.statusCode = 400;
+          res.end('missing ?u=<url>');
+          return;
+        }
+        let targetUrl: URL;
+        try {
+          targetUrl = new URL(target);
+        } catch {
+          res.statusCode = 400;
+          res.end('invalid target url');
+          return;
+        }
+        if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
+          res.statusCode = 400;
+          res.end('only http(s) allowed');
+          return;
+        }
+        const upstream = await fetch(targetUrl.href, {
+          method: req.method as string,
+          redirect: 'follow'
+        });
+        res.statusCode = upstream.status;
+        for (const h of ['content-type', 'content-length', 'last-modified', 'etag']) {
+          const v = upstream.headers.get(h);
+          if (v) res.setHeader(h, v);
+        }
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        if (req.method === 'HEAD' || !upstream.body) {
+          res.end();
+          return;
+        }
+        const reader = upstream.body.getReader();
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(value);
+        }
+        res.end();
+      } catch (err) {
+        res.statusCode = 502;
+        res.end(`proxy fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
+  }
+};
+
 export default defineConfig({
-  plugins: [stripGzipEncodingForTarGz],
+  plugins: [stripGzipEncodingForTarGz, r2ProxyDevMiddleware],
   resolve: {
     alias: {
       '@webclap/wclap-host-js': `${wclapJsRoot}/wclap.mjs`

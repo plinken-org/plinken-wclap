@@ -127,6 +127,7 @@ ui.stopBtn.addEventListener('click', () => void onStop());
 renderRack();
 wirePluginModal();
 wireMasterVolume();
+wireShelfUrlLoader();
 const proxyReady = registerPluginProxy();
 void loadShelf();
 void setupWebMidi();
@@ -144,6 +145,109 @@ async function loadShelf(): Promise<void> {
     console.warn('[wclap-host] /shelf.json fetch errored', err);
   }
   renderShelf();
+}
+
+// ---------------------------------------------------------------------------
+// URL-driven shelf entries (ephemeral, not persisted)
+// ---------------------------------------------------------------------------
+//
+// Paste a URL to a `.wclap.tar.gz` or `.wasm` and we add a temporary chip
+// to the shelf. `loadIntoSlot` already accepts arbitrary URLs (it fetches
+// + sniffs format from bytes), so dragging the chip just works. CORS on
+// the remote bucket must allow this origin or the fetch will fail when
+// you actually load the chip into a slot.
+
+function wireShelfUrlLoader(): void {
+  const input = document.getElementById('shelfUrlInput') as HTMLInputElement | null;
+  const btn = document.getElementById('shelfUrlAdd') as HTMLButtonElement | null;
+  if (!input || !btn) return;
+  const submit = (): void => {
+    // Empty field uses the placeholder as the URL — convenient for the
+    // one-click "show me what this does" path. The placeholder is the
+    // canonical demo bundle hosted in R2.
+    const url = input.value.trim() || input.placeholder.trim();
+    if (!url) return;
+    void addUrlToShelf(url, input, btn);
+  };
+  btn.addEventListener('click', submit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submit();
+    }
+  });
+}
+
+// Same-origin proxy on the wclap-host worker (and mirrored by a vite dev
+// middleware). The page never reads cross-origin URLs directly — plugin
+// authors don't have to configure CORS on their own bucket, and the proxy
+// preserves COEP via `Cross-Origin-Resource-Policy: cross-origin`.
+function proxiedUrl(remote: string): string {
+  return `/r2-proxy?u=${encodeURIComponent(remote)}`;
+}
+
+async function addUrlToShelf(
+  rawUrl: string,
+  input: HTMLInputElement,
+  btn: HTMLButtonElement
+): Promise<void> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    showError(ui, new Error(`Invalid URL: ${rawUrl}`));
+    return;
+  }
+
+  const itemId = `url:${parsed.href}`;
+  if (SHELF.some((s) => s.id === itemId)) {
+    setStatus(ui, 'That URL is already on the shelf.');
+    return;
+  }
+
+  // Pre-flight through the proxy so the user finds out about a bad URL /
+  // dead bucket / 404 here rather than 4 clicks later. Proxy adds CORS so
+  // we always get a response back; failures here mean the remote is
+  // genuinely unreachable.
+  const probeUrl = proxiedUrl(parsed.href);
+  btn.disabled = true;
+  try {
+    const res = await fetch(probeUrl, { method: 'HEAD' });
+    if (!res.ok) {
+      throw new Error(`HEAD ${parsed.href}: ${res.status} ${res.statusText}`);
+    }
+  } catch (err) {
+    btn.disabled = false;
+    showError(
+      ui,
+      new Error(
+        `Couldn't reach ${parsed.href}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      )
+    );
+    return;
+  }
+  btn.disabled = false;
+
+  // Synthesize a shelf item. `url` is the proxy URL so loadIntoSlot's
+  // fetch() goes through it automatically. `hint` shows the original host
+  // on the chip so the user knows where it came from.
+  const fileName = parsed.pathname.split('/').pop() ?? parsed.host;
+  const label = fileName.replace(/\.(wclap\.tar\.gz|wasm)$/i, '');
+  const item: ShelfItem = {
+    id: itemId,
+    label,
+    url: proxiedUrl(parsed.href),
+    vendor: parsed.host,
+    description: `Loaded from ${parsed.host}`,
+    features: ['user-loaded'],
+    hint: parsed.host
+  };
+  SHELF.push(item);
+  renderShelf();
+  input.value = '';
+  setStatus(ui, `Added "${label}" to shelf.`);
 }
 
 async function onPlay(): Promise<void> {
@@ -735,6 +839,7 @@ function renderShelf(): void {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'shelfChip';
+    if (item.id.startsWith('url:')) chip.classList.add('shelfChip--remote');
     chip.draggable = true;
     chip.dataset.shelfId = item.id;
 
@@ -1484,11 +1589,14 @@ function rms(analyser: AnalyserNode): number {
 
 const CLAP_EVENT_NOTE_ON = 0;
 const CLAP_EVENT_NOTE_OFF = 1;
+const CLAP_EVENT_MIDI = 10;
 const CLAP_CORE_EVENT_SPACE_ID = 0;
 
 // clap_event_note: header(16) + note_id(4) + port_index(2) + channel(2) +
 // key(2) + pad(6, double 8-align) + velocity(8) = 40 bytes.
 const CLAP_EVENT_NOTE_SIZE = 40;
+// clap_event_midi: header(16) + port_index(2) + data[3] + pad(3) = 24.
+const CLAP_EVENT_MIDI_SIZE = 24;
 
 function encodeClapNoteEvent(
   isOn: boolean,
@@ -1511,6 +1619,24 @@ function encodeClapNoteEvent(
   dv.setInt16(24, key, true); // key
   // bytes 26..32 are alignment padding for the double
   dv.setFloat64(32, velocity, true); // velocity (0.0..1.0)
+  return buf;
+}
+
+function encodeClapMidiEvent(midiBytes: Uint8Array): ArrayBuffer {
+  // Pass-through wrapper for any 1–3-byte channel-voice message (CC, pitch
+  // bend, aftertouch). Plugins that consume MIDI dispatch on header.type =
+  // CLAP_EVENT_MIDI and read the raw bytes from `data[3]`.
+  const buf = new ArrayBuffer(CLAP_EVENT_MIDI_SIZE);
+  const dv = new DataView(buf);
+  dv.setUint32(0, CLAP_EVENT_MIDI_SIZE, true); // size
+  dv.setUint32(4, 0, true); // time = block start
+  dv.setUint16(8, CLAP_CORE_EVENT_SPACE_ID, true);
+  dv.setUint16(10, CLAP_EVENT_MIDI, true);
+  dv.setUint32(12, 1, true); // flags = CLAP_EVENT_IS_LIVE
+  dv.setUint16(16, 0, true); // port_index
+  dv.setUint8(18, midiBytes[0] ?? 0);
+  dv.setUint8(19, midiBytes[1] ?? 0);
+  dv.setUint8(20, midiBytes[2] ?? 0);
   return buf;
 }
 
@@ -1593,9 +1719,17 @@ async function setupWebMidi(): Promise<void> {
       } else if (high === 0x80 || (high === 0x90 && velRaw === 0)) {
         if (heldNotes.delete(`${channel}:${key}`)) refreshMidiNotesUi();
         fanoutEvent(encodeClapNoteEvent(false, channel, key, velRaw / 127));
+      } else if (
+        high === 0xb0 || // CC
+        high === 0xe0 || // pitch bend
+        high === 0xd0 || // channel aftertouch
+        high === 0xa0 || // poly aftertouch
+        high === 0xc0    // program change (rare but harmless)
+      ) {
+        fanoutEvent(encodeClapMidiEvent(data));
       }
-      // Other MIDI messages (CC, pitch-bend, aftertouch) — LED still blinks
-      // (see flashMidiLed above) but no CLAP event emitted at M4.
+      // SysEx (0xF0) is multi-byte; would need clap_event_midi_sysex —
+      // skip for now.
     };
   };
 
