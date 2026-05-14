@@ -33,7 +33,7 @@ use crate::{
     },
 };
 
-#[allow(dead_code)] // fields read by wasm32 process / mainThread paths.
+#[allow(dead_code)] // fields read by wasm32 process / mainThread / webview paths.
 pub(crate) struct Plugin {
     pub(crate) instance_handle: u32,
     pub(crate) hosted_handle: u32,
@@ -42,6 +42,9 @@ pub(crate) struct Plugin {
     /// struct is reused every block; `pluginProcess` only mutates
     /// `frames_count`.
     pub(crate) process_ptr: u32,
+    /// `clap.webview/3` extension pointer, populated lazily by
+    /// `pluginGetInfo`. Zero if the plugin doesn't advertise the extension.
+    pub(crate) webview_ext_ptr: u32,
 }
 
 pub(crate) struct PluginPool {
@@ -189,10 +192,20 @@ unsafe fn ensure_factory(hosted_handle: u32) -> Option<FactoryWalk> {
         return None;
     }
 
-    // 3. clap_entry.init(NULL).
+    // 3. clap_entry.init(modulePath). JS handed us the plugin's path via
+    //    `_wclapInstanceSetPath` before init32. The plugin uses it to build
+    //    `file:` URIs that the service-worker proxy resolves against the
+    //    unpacked tar.gz file map. Passing NULL here leaves Auto-Pan with
+    //    an empty `modulePath` and webview requests miss the file map.
+    let path_bytes = crate::wclap_instance::get(inst).path.clone();
+    let path_ptr = if path_bytes.is_empty() {
+        0
+    } else {
+        alloc_cstr(inst, &path_bytes)
+    };
     let mut arg = [0u8; SLOT_SIZE];
     let mut result = [0u8; SLOT_SIZE];
-    write_arg_u32(&mut arg, 0);
+    write_arg_u32(&mut arg, path_ptr);
     call32(
         inst,
         clap_entry_ptr + clap::entry::INIT as u32,
@@ -408,6 +421,24 @@ pub extern "C" fn createPlugin(hosted_handle: u32, plugin_id_bytes: u32) -> u32 
             return 0;
         }
 
+        // CLAP requires `plugin.init(plugin)` between `create_plugin` and
+        // any other plugin call. Skipping it broke `webviewGetUri` in
+        // auto-pan (the as-clap binding sets its singleton inside
+        // `pluginInit`, and the webview trampoline reads that singleton).
+        let mut init_arg = [0u8; SLOT_SIZE];
+        write_arg_u32(&mut init_arg, plugin_ptr);
+        call32(
+            walk.inst,
+            plugin_ptr + clap::plugin::INIT as u32,
+            1,
+            result.as_mut_ptr(),
+            init_arg.as_ptr(),
+            1,
+        );
+        if read_result_u32(&result) == 0 {
+            return 0;
+        }
+
         let p = pool();
         let id = p.next_id;
         p.next_id += 1;
@@ -418,6 +449,7 @@ pub extern "C" fn createPlugin(hosted_handle: u32, plugin_id_bytes: u32) -> u32 
                 hosted_handle,
                 plugin_ptr,
                 process_ptr: 0,
+                webview_ext_ptr: 0,
             },
         );
         host::get(hosted_handle).plugins.push(id);
@@ -800,6 +832,60 @@ pub extern "C" fn pluginProcess(plugin_handle: u32, frames_count: u32) -> u32 {
 /// the main thread, which destructures `{desc, webview, methods}`. Page
 /// code only reads `desc.name` and `desc.vendor`; everything else gets a
 /// CBOR-null placeholder for now.
+#[cfg(target_arch = "wasm32")]
+unsafe fn plugin_get_extension(inst: u32, plugin_ptr: u32, ext_id: &[u8]) -> u32 {
+    let ext_id_ptr = alloc_cstr(inst, ext_id);
+    let mut args2 = [0u8; SLOT_SIZE * 2];
+    write_arg_u32((&mut args2[0..SLOT_SIZE]).try_into().unwrap(), plugin_ptr);
+    write_arg_u32((&mut args2[SLOT_SIZE..]).try_into().unwrap(), ext_id_ptr);
+    let mut result = [0u8; SLOT_SIZE];
+    call32(
+        inst,
+        plugin_ptr + clap::plugin::GET_EXTENSION as u32,
+        1,
+        result.as_mut_ptr(),
+        args2.as_ptr(),
+        2,
+    );
+    read_result_u32(&result)
+}
+
+/// Two-call probe for `webview.get_uri`. First call with cap=0 returns the
+/// byte length; second call with a sized buffer writes the URI bytes (NUL
+/// terminator within the buffer if it fits). Auto-Pan documents this
+/// protocol in `plugins/com.plinken/auto-pan/assembly/auto-pan.ts`.
+#[cfg(target_arch = "wasm32")]
+unsafe fn read_webview_uri(inst: u32, plugin_ptr: u32, webview_ext_ptr: u32) -> Vec<u8> {
+    let call_get_uri = |buf_ptr: u32, cap: u32| -> i32 {
+        let mut args3 = [0u8; SLOT_SIZE * 3];
+        write_arg_u32((&mut args3[0..SLOT_SIZE]).try_into().unwrap(), plugin_ptr);
+        write_arg_u32((&mut args3[SLOT_SIZE..2 * SLOT_SIZE]).try_into().unwrap(), buf_ptr);
+        write_arg_u32((&mut args3[2 * SLOT_SIZE..]).try_into().unwrap(), cap);
+        let mut result = [0u8; SLOT_SIZE];
+        call32(
+            inst,
+            webview_ext_ptr + clap::webview::GET_URI as u32,
+            1,
+            result.as_mut_ptr(),
+            args3.as_ptr(),
+            3,
+        );
+        read_result_u32(&result) as i32
+    };
+
+    let len = call_get_uri(0, 0);
+    if len <= 0 {
+        return Vec::new();
+    }
+    let cap = (len as u32) + 1;
+    let plugin_buf = malloc32(inst, cap);
+    let _written = call_get_uri(plugin_buf, cap);
+
+    let mut out = alloc::vec![0u8; len as usize];
+    memcpyFromOther32(inst, out.as_mut_ptr(), plugin_buf, len as u32);
+    out
+}
+
 #[no_mangle]
 pub extern "C" fn pluginGetInfo(plugin_handle: u32, bytes_handle: u32) -> u32 {
     #[cfg(target_arch = "wasm32")]
@@ -837,8 +923,18 @@ pub extern "C" fn pluginGetInfo(plugin_handle: u32, bytes_handle: u32) -> u32 {
         let name = read_descriptor_str(clap::descriptor::NAME);
         let vendor = read_descriptor_str(clap::descriptor::VENDOR);
 
-        // CBOR: {desc: {id, name, vendor}, webview: null}
-        let mut cbor = Vec::with_capacity(128);
+        // Webview URI via `clap.webview/3` (draft CLAP extension). Auto-Pan
+        // and Signalsmith advertise it; plugins without a UI return null.
+        // Cached on Plugin so pluginMessage can reach the same extension.
+        let webview_ext = plugin_get_extension(inst, plugin_ptr, clap::EXT_WEBVIEW);
+        get(plugin_handle).webview_ext_ptr = webview_ext;
+        let webview_uri = if webview_ext != 0 {
+            read_webview_uri(inst, plugin_ptr, webview_ext)
+        } else {
+            Vec::new()
+        };
+
+        let mut cbor = Vec::with_capacity(192);
         cbor_map_header(&mut cbor, 2);
         cbor_text(&mut cbor, b"desc");
         cbor_map_header(&mut cbor, 3);
@@ -849,9 +945,63 @@ pub extern "C" fn pluginGetInfo(plugin_handle: u32, bytes_handle: u32) -> u32 {
         cbor_text(&mut cbor, b"vendor");
         cbor_text(&mut cbor, &vendor);
         cbor_text(&mut cbor, b"webview");
-        cbor.push(0xf6); // CBOR null
+        if webview_uri.is_empty() {
+            cbor.push(0xf6); // CBOR null
+        } else {
+            cbor_text(&mut cbor, &webview_uri);
+        }
 
         crate::bytes::set(bytes_handle, &cbor)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (plugin_handle, bytes_handle);
+        0
+    }
+}
+
+/// `pluginMessage(pluginHandle, bytesHandle) -> u32`
+///
+/// Iframe → plugin direction of the webview channel. JS hands us a bytes-
+/// pool handle holding the message bytes (typically CBOR from the UI). We
+/// allocate a copy in plugin memory and call `webview.receive(plugin, buf,
+/// size)`.
+#[no_mangle]
+pub extern "C" fn pluginMessage(plugin_handle: u32, bytes_handle: u32) -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        let (inst, plugin_ptr, webview_ext) = {
+            let p = get(plugin_handle);
+            (p.instance_handle, p.plugin_ptr, p.webview_ext_ptr)
+        };
+        if webview_ext == 0 {
+            return 0;
+        }
+        let bytes = crate::bytes::view(bytes_handle);
+        let plugin_buf = if bytes.is_empty() {
+            0
+        } else {
+            let p = malloc32(inst, bytes.len() as u32);
+            memcpyToOther32(inst, p, bytes.as_ptr(), bytes.len() as u32);
+            p
+        };
+        let mut args3 = [0u8; SLOT_SIZE * 3];
+        write_arg_u32((&mut args3[0..SLOT_SIZE]).try_into().unwrap(), plugin_ptr);
+        write_arg_u32((&mut args3[SLOT_SIZE..2 * SLOT_SIZE]).try_into().unwrap(), plugin_buf);
+        write_arg_u32(
+            (&mut args3[2 * SLOT_SIZE..]).try_into().unwrap(),
+            bytes.len() as u32,
+        );
+        let mut result = [0u8; SLOT_SIZE];
+        call32(
+            inst,
+            webview_ext + clap::webview::RECEIVE as u32,
+            1,
+            result.as_mut_ptr(),
+            args3.as_ptr(),
+            3,
+        );
+        read_result_u32(&result)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {

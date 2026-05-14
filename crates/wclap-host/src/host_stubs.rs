@@ -19,8 +19,31 @@
 #![cfg(target_arch = "wasm32")]
 
 // ---------------------------------------------------------------------------
-// clap_host_t callbacks
+// clap_host_t + event-list callbacks
+//
+// Each stub touches a unique static so LLVM can't merge identical-shaped
+// stubs into one function. We learned the hard way: with `-> 0` bodies
+// LLVM collapsed all three `(u32, u32, u32) -> u32` stubs into one, all
+// three `(u32, u32) -> void` stubs into another. JS's `registerHost32`
+// keys entries by table index ("hostFn"+fnIndex) — collisions there meant
+// only the last-registered stub at each shared index got installed in the
+// plugin's function table; the others left their slots null, and the
+// plugin's first `call_indirect` (auto-pan's hostGetExtensionUtf8) trapped
+// with "null function". Each TAG_* address read forces a distinct body.
 // ---------------------------------------------------------------------------
+
+static TAG_GET_EXTENSION: u8 = 0;
+static TAG_REQUEST_RESTART: u8 = 0;
+static TAG_REQUEST_PROCESS: u8 = 0;
+static TAG_REQUEST_CALLBACK: u8 = 0;
+static TAG_EVENTS_IN_SIZE: u8 = 0;
+static TAG_EVENTS_IN_GET: u8 = 0;
+static TAG_EVENTS_OUT_TRY_PUSH: u8 = 0;
+
+#[inline(never)]
+fn touch(tag: &'static u8) {
+    core::hint::black_box(tag);
+}
 
 #[no_mangle]
 pub extern "C" fn _wclap_host_get_extension(
@@ -28,27 +51,28 @@ pub extern "C" fn _wclap_host_get_extension(
     _host_ptr: u32,
     _ext_id_ptr: u32,
 ) -> u32 {
+    touch(&TAG_GET_EXTENSION);
     0
 }
 
 #[no_mangle]
-pub extern "C" fn _wclap_host_request_restart(_ctx: u32, _host_ptr: u32) {}
+pub extern "C" fn _wclap_host_request_restart(_ctx: u32, _host_ptr: u32) {
+    touch(&TAG_REQUEST_RESTART);
+}
 
 #[no_mangle]
-pub extern "C" fn _wclap_host_request_process(_ctx: u32, _host_ptr: u32) {}
+pub extern "C" fn _wclap_host_request_process(_ctx: u32, _host_ptr: u32) {
+    touch(&TAG_REQUEST_PROCESS);
+}
 
 #[no_mangle]
-pub extern "C" fn _wclap_host_request_callback(_ctx: u32, _host_ptr: u32) {}
-
-// ---------------------------------------------------------------------------
-// clap_input_events / clap_output_events callbacks
-// M1 hosts no events: input list is always empty, output try_push silently
-// drops. Plugins that emit param-update / note events at M2 will route
-// through this path — for now ignore them.
-// ---------------------------------------------------------------------------
+pub extern "C" fn _wclap_host_request_callback(_ctx: u32, _host_ptr: u32) {
+    touch(&TAG_REQUEST_CALLBACK);
+}
 
 #[no_mangle]
 pub extern "C" fn _wclap_events_in_size(_ctx: u32, _list_ptr: u32) -> u32 {
+    touch(&TAG_EVENTS_IN_SIZE);
     0
 }
 
@@ -56,6 +80,7 @@ pub extern "C" fn _wclap_events_in_size(_ctx: u32, _list_ptr: u32) -> u32 {
 // of the right type for the plugin to take its address.
 #[no_mangle]
 pub extern "C" fn _wclap_events_in_get(_ctx: u32, _list_ptr: u32, _index: u32) -> u32 {
+    touch(&TAG_EVENTS_IN_GET);
     0
 }
 
@@ -66,6 +91,7 @@ pub extern "C" fn _wclap_events_out_try_push(
     _list_ptr: u32,
     _event_ptr: u32,
 ) -> u32 {
+    touch(&TAG_EVENTS_OUT_TRY_PUSH);
     0
 }
 

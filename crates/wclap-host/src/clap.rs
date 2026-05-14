@@ -82,6 +82,18 @@ pub mod host {
 pub const FACTORY_ID: &[u8] = b"clap.plugin-factory\0";
 
 pub const EXT_AUDIO_PORTS: &[u8] = b"clap.audio-ports\0";
+pub const EXT_WEBVIEW: &[u8] = b"clap.webview/3\0";
+
+pub mod webview {
+    //! `wclap_plugin_webview` — draft `clap.webview/3` extension.
+    //! `get_uri` follows a two-call probe: first call with `cap=0` returns
+    //! the required byte length; second call with a sized buffer writes the
+    //! UTF-8 URI (NUL-terminated within the buffer).
+    pub const GET_URI: usize = 0; // Function<i32, plugin*, char* buf, u32 cap>
+    pub const GET_RESOURCE: usize = 4; // Function<bool, plugin*, char* path, char* mime_buf, u32 mime_cap, ostream*>
+    pub const RECEIVE: usize = 8; // Function<bool, plugin*, void* buf, u32 size>
+    pub const SIZE: usize = 12;
+}
 
 pub mod audio_ports {
     //! `wclap_plugin_audio_ports` — extension returned by
@@ -167,6 +179,7 @@ mod tests {
         assert_eq!(process::SIZE, 40);
         assert_eq!(input_events::SIZE, 12);
         assert_eq!(output_events::SIZE, 8);
+        assert_eq!(webview::SIZE, 12);
     }
 
     #[test]
