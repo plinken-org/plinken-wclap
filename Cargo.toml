@@ -1,5 +1,3 @@
 [workspace]
 resolver = "2"
-members = []
-
-# Future Rust crates will be added under crates/ and listed here.
+members = ["crates/wclap-host"]

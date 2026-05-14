@@ -167,3 +167,7 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Rust build output. Cargo.lock IS committed (workspace contains binaries
+# / examples — reproducible builds matter).
+/target/

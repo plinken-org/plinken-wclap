@@ -1,0 +1,23 @@
+[package]
+name = "wclap-host"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+description = "Load WCLAP (CLAP-as-wasm) plugins natively and host them via wasmtime"
+repository = "https://github.com/taluvi-dev/plinken-org"
+publish = false
+
+[dependencies]
+wasmtime = "25"
+wasmtime-wasi = "25"
+thiserror = "1"
+tracing = "0.1"
+
+[dev-dependencies]
+anyhow = "1"
+hound = "3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[example]]
+name = "tiny_host"
+path = "examples/tiny_host.rs"
