@@ -33,7 +33,7 @@ use crate::{
     },
 };
 
-#[allow(dead_code)] // fields read by wasm32 process / mainThread / webview paths.
+#[allow(dead_code)] // fields read by wasm32 process / mainThread / webview / events paths.
 pub(crate) struct Plugin {
     pub(crate) instance_handle: u32,
     pub(crate) hosted_handle: u32,
@@ -45,6 +45,18 @@ pub(crate) struct Plugin {
     /// `clap.webview/3` extension pointer, populated lazily by
     /// `pluginGetInfo`. Zero if the plugin doesn't advertise the extension.
     pub(crate) webview_ext_ptr: u32,
+    /// Per-plugin `clap_host_webview` struct in plugin memory. Allocated
+    /// by `createPlugin`. `_wclap_host_get_extension` returns this when
+    /// the plugin asks for `clap.webview/3`.
+    pub(crate) host_webview_struct_ptr: u32,
+    /// Events queued by `pluginAcceptEvent` since the last process block.
+    /// Drained on each `pluginProcess` — marshalled into plugin memory,
+    /// then handed to the plugin via the `events_in_*` host stubs.
+    pub(crate) event_queue: Vec<Vec<u8>>,
+    /// Pointers (in plugin memory) to the events from `event_queue` that
+    /// the plugin is currently iterating. Repopulated each `pluginProcess`
+    /// and cleared after the plugin's `process` returns.
+    pub(crate) current_event_ptrs: Vec<u32>,
 }
 
 pub(crate) struct PluginPool {
@@ -113,6 +125,8 @@ unsafe fn register_stubs(inst: u32, hosted_handle: u32) -> HostStubIndices {
             sig.len() as u32,
         )
     };
+    // clap_host_webview.send is `bool(host, buf, size)` → "IIII" (i32 return + 3 i32 args).
+    const SIG_IIII: &[u8] = b"IIII";
     HostStubIndices {
         get_extension: reg(host_stubs::get_extension_index(), host_stubs::SIG_III),
         request_restart: reg(host_stubs::request_restart_index(), host_stubs::SIG_VI),
@@ -121,11 +135,12 @@ unsafe fn register_stubs(inst: u32, hosted_handle: u32) -> HostStubIndices {
         events_in_size: reg(host_stubs::events_in_size_index(), host_stubs::SIG_II),
         events_in_get: reg(host_stubs::events_in_get_index(), host_stubs::SIG_III),
         events_out_try_push: reg(host_stubs::events_out_try_push_index(), host_stubs::SIG_III),
+        host_webview_send: reg(host_stubs::host_webview_send_index(), SIG_IIII),
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-unsafe fn build_host_struct(inst: u32, hosted_handle: u32, stubs: &HostStubIndices) -> u32 {
+unsafe fn build_host_struct(inst: u32, plugin_handle: u32, stubs: &HostStubIndices) -> u32 {
     let host_ptr = malloc32(inst, clap::host::SIZE as u32);
 
     let name_p = alloc_cstr(inst, b"Plinken");
@@ -141,7 +156,9 @@ unsafe fn build_host_struct(inst: u32, hosted_handle: u32, stubs: &HostStubIndic
     write_u32(&mut buf, clap::host::VERSION, 1);
     write_u32(&mut buf, clap::host::VERSION + 4, 2);
     write_u32(&mut buf, clap::host::VERSION + 8, 2);
-    write_u32(&mut buf, clap::host::HOST_DATA, hosted_handle);
+    // host_data carries the Rust-side plugin handle so host-stub callbacks
+    // can find back to the right Plugin (e.g. resolve host_webview_struct_ptr).
+    write_u32(&mut buf, clap::host::HOST_DATA, plugin_handle);
     write_u32(&mut buf, clap::host::NAME, name_p);
     write_u32(&mut buf, clap::host::VENDOR, vendor_p);
     write_u32(&mut buf, clap::host::URL, url_p);
@@ -153,6 +170,14 @@ unsafe fn build_host_struct(inst: u32, hosted_handle: u32, stubs: &HostStubIndic
 
     memcpyToOther32(inst, host_ptr, buf.as_ptr(), buf.len() as u32);
     host_ptr
+}
+
+#[cfg(target_arch = "wasm32")]
+unsafe fn build_host_webview_struct(inst: u32, send_index: u32) -> u32 {
+    let ptr = malloc32(inst, clap::host_webview::SIZE as u32);
+    let bytes = send_index.to_le_bytes();
+    memcpyToOther32(inst, ptr + clap::host_webview::SEND as u32, bytes.as_ptr(), 4);
+    ptr
 }
 
 // ---------------------------------------------------------------------------
@@ -389,7 +414,34 @@ pub extern "C" fn createPlugin(hosted_handle: u32, plugin_id_bytes: u32) -> u32 
         let stubs = host::get(hosted_handle)
             .stubs
             .expect("host stubs must be registered by ensure_factory");
-        let host_ptr = build_host_struct(walk.inst, hosted_handle, &stubs);
+
+        // Reserve the plugin handle up front and pre-allocate the
+        // clap_host_webview struct so `_wclap_host_get_extension` can
+        // resolve "clap.webview/3" while the plugin's `init` is running
+        // (which is before `factory.create_plugin` returns the plugin_ptr).
+        let plugin_handle = {
+            let p = pool();
+            let id = p.next_id;
+            p.next_id += 1;
+            id
+        };
+        let host_webview_struct_ptr =
+            build_host_webview_struct(walk.inst, stubs.host_webview_send);
+        pool().map.insert(
+            plugin_handle,
+            Plugin {
+                instance_handle: walk.inst,
+                hosted_handle,
+                plugin_ptr: 0, // patched after factory.create_plugin
+                process_ptr: 0,
+                webview_ext_ptr: 0,
+                host_webview_struct_ptr,
+                event_queue: Vec::new(),
+                current_event_ptrs: Vec::new(),
+            },
+        );
+
+        let host_ptr = build_host_struct(walk.inst, plugin_handle, &stubs);
 
         let pid_bytes = crate::bytes::view(plugin_id_bytes);
         let plugin_id_cstr = alloc_cstr(walk.inst, pid_bytes);
@@ -418,8 +470,10 @@ pub extern "C" fn createPlugin(hosted_handle: u32, plugin_id_bytes: u32) -> u32 
         );
         let plugin_ptr = read_result_u32(&result);
         if plugin_ptr == 0 {
+            pool().map.remove(&plugin_handle);
             return 0;
         }
+        get(plugin_handle).plugin_ptr = plugin_ptr;
 
         // CLAP requires `plugin.init(plugin)` between `create_plugin` and
         // any other plugin call. Skipping it broke `webviewGetUri` in
@@ -436,24 +490,12 @@ pub extern "C" fn createPlugin(hosted_handle: u32, plugin_id_bytes: u32) -> u32 
             1,
         );
         if read_result_u32(&result) == 0 {
+            pool().map.remove(&plugin_handle);
             return 0;
         }
 
-        let p = pool();
-        let id = p.next_id;
-        p.next_id += 1;
-        p.map.insert(
-            id,
-            Plugin {
-                instance_handle: walk.inst,
-                hosted_handle,
-                plugin_ptr,
-                process_ptr: 0,
-                webview_ext_ptr: 0,
-            },
-        );
-        host::get(hosted_handle).plugins.push(id);
-        id
+        host::get(hosted_handle).plugins.push(plugin_handle);
+        plugin_handle
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -674,10 +716,15 @@ pub extern "C" fn pluginStart(
             Vec::new()
         };
 
-        // 4. Build empty in_events / out_events lists in plugin memory.
+        // 4. Build in_events / out_events lists in plugin memory. The `ctx`
+        //    field carries the plugin handle so the event-list host stubs
+        //    can find back to this Plugin's queues without depending on
+        //    register-time context (which is per-Hosted, not per-plugin).
         let in_events_ptr = malloc32(inst, clap::input_events::SIZE as u32);
         {
             let mut ev = [0u8; clap::input_events::SIZE];
+            ev[clap::input_events::CTX..clap::input_events::CTX + 4]
+                .copy_from_slice(&plugin_handle.to_le_bytes());
             ev[clap::input_events::SIZE_FN..clap::input_events::SIZE_FN + 4]
                 .copy_from_slice(&stubs.events_in_size.to_le_bytes());
             ev[clap::input_events::GET..clap::input_events::GET + 4]
@@ -687,6 +734,8 @@ pub extern "C" fn pluginStart(
         let out_events_ptr = malloc32(inst, clap::output_events::SIZE as u32);
         {
             let mut ev = [0u8; clap::output_events::SIZE];
+            ev[clap::output_events::CTX..clap::output_events::CTX + 4]
+                .copy_from_slice(&plugin_handle.to_le_bytes());
             ev[clap::output_events::TRY_PUSH..clap::output_events::TRY_PUSH + 4]
                 .copy_from_slice(&stubs.events_out_try_push.to_le_bytes());
             memcpyToOther32(inst, out_events_ptr, ev.as_ptr(), ev.len() as u32);
@@ -775,11 +824,33 @@ pub extern "C" fn pluginStart(
     }
 }
 
+/// `pluginAcceptEvent(pluginHandle, bytesHandle) -> u32`
+///
+/// Page or upstream plugin queued a CLAP event for this plugin. We hold
+/// the bytes on `Plugin.event_queue` until the next `pluginProcess` block
+/// where they get marshalled into plugin memory and handed over via the
+/// `events_in_*` host stubs.
+#[no_mangle]
+pub extern "C" fn pluginAcceptEvent(plugin_handle: u32, bytes_handle: u32) -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        let bytes = crate::bytes::view(bytes_handle).to_vec();
+        get(plugin_handle).event_queue.push(bytes);
+        1
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (plugin_handle, bytes_handle);
+        0
+    }
+}
+
 /// `pluginProcess(pluginHandle, framesCount) -> process_status`
 ///
 /// Per-block: stamp `framesCount` into the `clap_process` struct (other
-/// fields are stable from `pluginStart`), call `clap_plugin.process`,
-/// return the plugin's status int unchanged.
+/// fields are stable from `pluginStart`), marshal any queued events into
+/// plugin memory so the plugin can read them via `clap_input_events`,
+/// call `clap_plugin.process`, return the plugin's status int unchanged.
 #[no_mangle]
 pub extern "C" fn pluginProcess(plugin_handle: u32, frames_count: u32) -> u32 {
     #[cfg(target_arch = "wasm32")]
@@ -791,6 +862,20 @@ pub extern "C" fn pluginProcess(plugin_handle: u32, frames_count: u32) -> u32 {
         if process_ptr == 0 {
             return 0; // not started yet
         }
+
+        // Drain queued events into plugin memory. `event_queue` accumulates
+        // between blocks; each block consumes its events and the queue is
+        // reset. `current_event_ptrs` exposes the in-plugin-memory
+        // addresses for the `events_in_get` host stub to return as the
+        // plugin iterates the input list.
+        let queue = core::mem::take(&mut get(plugin_handle).event_queue);
+        let mut ptrs = Vec::with_capacity(queue.len());
+        for ev in &queue {
+            let p = malloc32(inst, ev.len() as u32);
+            memcpyToOther32(inst, p, ev.as_ptr(), ev.len() as u32);
+            ptrs.push(p);
+        }
+        get(plugin_handle).current_event_ptrs = ptrs;
 
         // Patch frames_count.
         let fc = frames_count.to_le_bytes();
@@ -817,6 +902,12 @@ pub extern "C" fn pluginProcess(plugin_handle: u32, frames_count: u32) -> u32 {
             args2.as_ptr(),
             2,
         );
+
+        // Tear down the per-block event-pointer list. The malloc'd event
+        // bytes in plugin memory leak until plugin teardown; that's OK
+        // for M4 — wclap-cpp's malloc has no free either.
+        get(plugin_handle).current_event_ptrs.clear();
+
         read_result_u32(&result)
     }
     #[cfg(not(target_arch = "wasm32"))]

@@ -283,6 +283,14 @@ class ClapAudioWorkletProcessor extends AudioWorkletProcessor {
 		},
 		webviewOpen(isOpen, isVisible) {
 			// TODO: let the `clap.gui` extension know
+		},
+		// PATCH (plinken-org): external event ingress (e.g. Web MIDI in
+		// `apps/wclap-host/src/main.ts`). Pushes bytes into this slot's
+		// routing queue; `writePendingEvents` drains it next block and
+		// forwards via `hostApi.pluginAcceptEvent`.
+		acceptEvent(eventBytes) {
+			let routing = globalThis.clapRouting[this.routingId];
+			if (routing) routing.events.push(new Uint8Array(eventBytes));
 		}
 	};
 

@@ -22,6 +22,10 @@ export interface UiElements {
   meterL: HTMLElement;
   meterR: HTMLElement;
   errorBox: HTMLPreElement;
+  midiLed: HTMLElement;
+  midiStatus: HTMLElement;
+  midiNotes: HTMLElement;
+  midiPanic: HTMLButtonElement;
 }
 
 export function getElements(): UiElements {
@@ -37,7 +41,11 @@ export function getElements(): UiElements {
     stopBtn: el<HTMLButtonElement>('stopBtn'),
     meterL: el<HTMLElement>('meterL'),
     meterR: el<HTMLElement>('meterR'),
-    errorBox: el<HTMLPreElement>('errorBox')
+    errorBox: el<HTMLPreElement>('errorBox'),
+    midiLed: el<HTMLElement>('midiLed'),
+    midiStatus: el<HTMLElement>('midiStatus'),
+    midiNotes: el<HTMLElement>('midiNotes'),
+    midiPanic: el<HTMLButtonElement>('midiPanic')
   };
 }
 
@@ -77,6 +85,24 @@ export function showError(ui: UiElements, err: unknown): void {
 export function clearError(ui: UiElements): void {
   ui.errorBox.textContent = '';
   ui.errorBox.hidden = true;
+}
+
+let midiLedTimer: number | null = null;
+export function flashMidiLed(ui: UiElements): void {
+  ui.midiLed.classList.add('midiLedOn');
+  if (midiLedTimer != null) window.clearTimeout(midiLedTimer);
+  midiLedTimer = window.setTimeout(() => {
+    ui.midiLed.classList.remove('midiLedOn');
+    midiLedTimer = null;
+  }, 110);
+}
+
+export function setMidiStatus(ui: UiElements, text: string): void {
+  ui.midiStatus.textContent = text;
+}
+
+export function setMidiNotes(ui: UiElements, text: string): void {
+  ui.midiNotes.textContent = text;
 }
 
 export function setMeters(ui: UiElements, rmsL: number, rmsR: number): void {

@@ -95,6 +95,13 @@ pub mod webview {
     pub const SIZE: usize = 12;
 }
 
+pub mod host_webview {
+    //! `wclap_host_webview` — host side of `clap.webview/3`. Single
+    //! function pointer; plugin calls it to push bytes back to the iframe.
+    pub const SEND: usize = 0; // Function<bool, host*, void* buf, u32 size>
+    pub const SIZE: usize = 4;
+}
+
 pub mod audio_ports {
     //! `wclap_plugin_audio_ports` — extension returned by
     //! `plugin.get_extension(plugin, "clap.audio-ports")`.
@@ -180,6 +187,7 @@ mod tests {
         assert_eq!(input_events::SIZE, 12);
         assert_eq!(output_events::SIZE, 8);
         assert_eq!(webview::SIZE, 12);
+        assert_eq!(host_webview::SIZE, 4);
     }
 
     #[test]

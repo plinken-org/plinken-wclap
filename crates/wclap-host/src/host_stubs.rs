@@ -39,19 +39,55 @@ static TAG_REQUEST_CALLBACK: u8 = 0;
 static TAG_EVENTS_IN_SIZE: u8 = 0;
 static TAG_EVENTS_IN_GET: u8 = 0;
 static TAG_EVENTS_OUT_TRY_PUSH: u8 = 0;
+static TAG_HOST_WEBVIEW_SEND: u8 = 0;
 
 #[inline(never)]
 fn touch(tag: &'static u8) {
     core::hint::black_box(tag);
 }
 
+/// `host.get_extension(host, ext_id)` — the only smart host stub. Reads
+/// the ext_id C string out of plugin memory and matches against the
+/// extensions we expose:
+///   - `clap.webview/3` → per-plugin `clap_host_webview` struct pointer
+///     (cached on `Plugin.host_webview_struct_ptr` by `createPlugin`).
+/// Other ids fall through to 0 (= unsupported). All extension lookups
+/// for this hosted plugin route through this single registered slot.
 #[no_mangle]
 pub extern "C" fn _wclap_host_get_extension(
-    _ctx: u32,
-    _host_ptr: u32,
-    _ext_id_ptr: u32,
+    ctx: u32,
+    host_ptr: u32,
+    ext_id_ptr: u32,
 ) -> u32 {
     touch(&TAG_GET_EXTENSION);
+
+    // ctx was set at `registerHost32` time to the `Hosted` handle.
+    let inst = crate::host::get(ctx).instance_handle;
+
+    // Read up to 32 bytes of ext_id (more than enough for any CLAP id).
+    // memcpyFromOther32 clamps at plugin-memory bounds, leaving the tail
+    // of `buf` zero from initialisation — safe even for short strings.
+    let mut buf = [0u8; 32];
+    unsafe {
+        crate::instance::memcpyFromOther32(inst, buf.as_mut_ptr(), ext_id_ptr, buf.len() as u32);
+    }
+
+    if buf.starts_with(crate::clap::EXT_WEBVIEW) {
+        // Find the calling plugin via clap_host.host_data, which we set
+        // to the plugin handle at build_host_struct time.
+        let mut ph_bytes = [0u8; 4];
+        unsafe {
+            crate::instance::memcpyFromOther32(
+                inst,
+                ph_bytes.as_mut_ptr(),
+                host_ptr + crate::clap::host::HOST_DATA as u32,
+                4,
+            );
+        }
+        let plugin_handle = u32::from_le_bytes(ph_bytes);
+        return crate::plugin::get(plugin_handle).host_webview_struct_ptr;
+    }
+
     0
 }
 
@@ -70,29 +106,92 @@ pub extern "C" fn _wclap_host_request_callback(_ctx: u32, _host_ptr: u32) {
     touch(&TAG_REQUEST_CALLBACK);
 }
 
+/// Reads `clap_input_events.ctx` / `clap_output_events.ctx` (both at offset
+/// 0) — populated by `pluginStart` with the plugin handle — so the stubs
+/// can find their per-plugin queue.
+#[inline]
+fn plugin_handle_from_list(inst: u32, list_ptr: u32) -> u32 {
+    let mut bytes = [0u8; 4];
+    unsafe {
+        crate::instance::memcpyFromOther32(inst, bytes.as_mut_ptr(), list_ptr, 4);
+    }
+    u32::from_le_bytes(bytes)
+}
+
 #[no_mangle]
-pub extern "C" fn _wclap_events_in_size(_ctx: u32, _list_ptr: u32) -> u32 {
+pub extern "C" fn _wclap_events_in_size(ctx: u32, list_ptr: u32) -> u32 {
     touch(&TAG_EVENTS_IN_SIZE);
-    0
+    let inst = crate::host::get(ctx).instance_handle;
+    let plugin_handle = plugin_handle_from_list(inst, list_ptr);
+    crate::plugin::get(plugin_handle).current_event_ptrs.len() as u32
 }
 
-// Never invoked when `size` returns 0, but the table slot still needs a fn
-// of the right type for the plugin to take its address.
 #[no_mangle]
-pub extern "C" fn _wclap_events_in_get(_ctx: u32, _list_ptr: u32, _index: u32) -> u32 {
+pub extern "C" fn _wclap_events_in_get(ctx: u32, list_ptr: u32, index: u32) -> u32 {
     touch(&TAG_EVENTS_IN_GET);
-    0
+    let inst = crate::host::get(ctx).instance_handle;
+    let plugin_handle = plugin_handle_from_list(inst, list_ptr);
+    let ptrs = &crate::plugin::get(plugin_handle).current_event_ptrs;
+    *ptrs.get(index as usize).unwrap_or(&0)
 }
 
-// CLAP returns `bool`; wasm represents it as `i32`. 0 = "rejected".
+/// Plugin emitted an output event during its `process` call. Forward to
+/// `env.eventsOutTryPush`, which the AWP routes through `clapRouting` to
+/// every connected node's input queue (consumed on their next block).
+/// Returns 1 (accepted) — AWP's outputEvent is async-fire-and-forget; the
+/// plugin doesn't need a real success/fail signal.
 #[no_mangle]
 pub extern "C" fn _wclap_events_out_try_push(
-    _ctx: u32,
-    _list_ptr: u32,
-    _event_ptr: u32,
+    ctx: u32,
+    list_ptr: u32,
+    event_ptr: u32,
 ) -> u32 {
     touch(&TAG_EVENTS_OUT_TRY_PUSH);
-    0
+    let inst = crate::host::get(ctx).instance_handle;
+    let plugin_handle = plugin_handle_from_list(inst, list_ptr);
+
+    // First u32 of clap_event_header is the event's total byte size.
+    let mut size_bytes = [0u8; 4];
+    unsafe {
+        crate::instance::memcpyFromOther32(inst, size_bytes.as_mut_ptr(), event_ptr, 4);
+    }
+    let event_size = u32::from_le_bytes(size_bytes);
+    if event_size == 0 {
+        return 0;
+    }
+
+    unsafe {
+        crate::instance::eventsOutTryPush(plugin_handle, event_ptr as *const u8, event_size);
+    }
+    1
+}
+
+/// `clap_host_webview.send(host, buf, size)` — plugin → iframe push.
+/// AWP's `env.webviewSend` looks up its `instancePluginMap` by the
+/// plugin handle returned from `createPlugin`. We stash that handle in
+/// `clap_host.host_data` per-plugin and read it back here so each send
+/// routes to the right iframe.
+#[no_mangle]
+pub extern "C" fn _wclap_host_webview_send(
+    ctx: u32,
+    host_ptr: u32,
+    buf_ptr: u32,
+    size: u32,
+) -> u32 {
+    touch(&TAG_HOST_WEBVIEW_SEND);
+    let inst = crate::host::get(ctx).instance_handle;
+    let mut ph_bytes = [0u8; 4];
+    unsafe {
+        crate::instance::memcpyFromOther32(
+            inst,
+            ph_bytes.as_mut_ptr(),
+            host_ptr + crate::clap::host::HOST_DATA as u32,
+            4,
+        );
+        let plugin_handle = u32::from_le_bytes(ph_bytes);
+        crate::instance::webviewSend(plugin_handle, buf_ptr as *const u8, size);
+    }
+    1 // bool true
 }
 
 // ---------------------------------------------------------------------------
@@ -128,4 +227,7 @@ pub fn events_in_get_index() -> u32 {
 }
 pub fn events_out_try_push_index() -> u32 {
     _wclap_events_out_try_push as *const () as u32
+}
+pub fn host_webview_send_index() -> u32 {
+    _wclap_host_webview_send as *const () as u32
 }

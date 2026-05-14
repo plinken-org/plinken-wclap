@@ -42,6 +42,22 @@
             slot. Slots run top → bottom. Empty slots pass through.
           </p>
         </div>
+
+        <div id="midiBar" class="midiBar" aria-live="polite">
+          <span class="midiBarLabel">MIDI in</span>
+          <span id="midiLed" class="midiLed" aria-hidden="true"></span>
+          <span id="midiStatus" class="midiStatus">no device</span>
+          <button
+            id="midiPanic"
+            type="button"
+            class="midiPanic"
+            title="Send Note Off to every key (panic)"
+          >
+            all notes off
+          </button>
+          <span id="midiNotes" class="midiNotes"></span>
+        </div>
+
         <div id="rack" class="rack"></div>
 
         <div class="sectionHead sectionHeadShelf">

@@ -9,10 +9,13 @@ import ClapAudioNode, {
 import workletUrl from './wclap-runtime/clap-audioworkletprocessor.mjs?worker&url';
 import {
   clearError,
+  flashMidiLed,
   getElements,
   setAudioState,
   setCoi,
   setMeters,
+  setMidiNotes,
+  setMidiStatus,
   setPlugin,
   setSampleRate,
   setStatus,
@@ -120,6 +123,7 @@ renderRack();
 wirePluginModal();
 const proxyReady = registerPluginProxy();
 void loadShelf();
+void setupWebMidi();
 
 async function loadShelf(): Promise<void> {
   try {
@@ -1118,4 +1122,145 @@ function rms(analyser: AnalyserNode): number {
     sum += v * v;
   }
   return Math.sqrt(sum / len);
+}
+
+// ---------------------------------------------------------------------------
+// Web MIDI → CLAP note events
+// ---------------------------------------------------------------------------
+//
+// Translates incoming MIDI note on/off into `clap_event_note` byte buffers
+// and pushes them into every occupied slot's `effect.acceptEvent` (added as
+// a remoteMethod in `clap-audioworkletprocessor.mjs`). Each plugin decides
+// what to do with the event; instruments produce sound, effects ignore or
+// pass through.
+
+const CLAP_EVENT_NOTE_ON = 0;
+const CLAP_EVENT_NOTE_OFF = 1;
+const CLAP_CORE_EVENT_SPACE_ID = 0;
+
+// clap_event_note: header(16) + note_id(4) + port_index(2) + channel(2) +
+// key(2) + pad(6, double 8-align) + velocity(8) = 40 bytes.
+const CLAP_EVENT_NOTE_SIZE = 40;
+
+function encodeClapNoteEvent(
+  isOn: boolean,
+  channel: number,
+  key: number,
+  velocity: number
+): ArrayBuffer {
+  const buf = new ArrayBuffer(CLAP_EVENT_NOTE_SIZE);
+  const dv = new DataView(buf);
+  // header
+  dv.setUint32(0, CLAP_EVENT_NOTE_SIZE, true); // size
+  dv.setUint32(4, 0, true); // time (sample offset within block; 0 = block start)
+  dv.setUint16(8, CLAP_CORE_EVENT_SPACE_ID, true); // space_id
+  dv.setUint16(10, isOn ? CLAP_EVENT_NOTE_ON : CLAP_EVENT_NOTE_OFF, true); // type
+  dv.setUint32(12, 1, true); // flags = CLAP_EVENT_IS_LIVE
+  // body
+  dv.setInt32(16, -1, true); // note_id (-1 = unspecified)
+  dv.setInt16(20, 0, true); // port_index
+  dv.setInt16(22, channel, true); // channel
+  dv.setInt16(24, key, true); // key
+  // bytes 26..32 are alignment padding for the double
+  dv.setFloat64(32, velocity, true); // velocity (0.0..1.0)
+  return buf;
+}
+
+function fanoutEvent(buf: ArrayBuffer): void {
+  for (const slot of slots) {
+    const accept = (
+      slot.effect as { acceptEvent?: (b: ArrayBuffer) => unknown } | null
+    )?.acceptEvent;
+    if (typeof accept === 'function') accept.call(slot.effect, buf);
+  }
+}
+
+function panicAllNotesOff(): void {
+  // Send a NOTE_OFF for every key on channel 0 so any stuck note inside
+  // a plugin gets a release event. Then drop our held-state and refresh
+  // the display. Channel 0 is enough for our M4 plugins — they don't
+  // multi-channel route yet.
+  for (let key = 0; key < 128; key++) {
+    fanoutEvent(encodeClapNoteEvent(false, 0, key, 0));
+  }
+  heldNotes.clear();
+  refreshMidiNotesUi();
+  flashMidiLed(ui);
+}
+ui.midiPanic.addEventListener('click', panicAllNotesOff);
+
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+function midiNoteName(key: number): string {
+  const name = NOTE_NAMES[key % 12] ?? '?';
+  const octave = Math.floor(key / 12) - 1;
+  return `${name}${octave}`;
+}
+
+// Held notes (currently down) keyed by `${channel}:${key}`. On note-off
+// the entry is removed; the display reflects only what's actually held.
+const heldNotes = new Map<string, { key: number; vel: number }>();
+
+function refreshMidiNotesUi(): void {
+  const held = [...heldNotes.values()]
+    .map((n) => `${midiNoteName(n.key)}·${Math.round(n.vel * 127)}`)
+    .join(' ');
+  setMidiNotes(ui, held);
+}
+
+function refreshMidiInputsLabel(access: MIDIAccess): void {
+  const names = [...access.inputs.values()].map((i) => i.name ?? 'input');
+  setMidiStatus(ui, names.length ? names.join(', ') : 'no device');
+}
+
+async function setupWebMidi(): Promise<void> {
+  if (typeof navigator === 'undefined' || !navigator.requestMIDIAccess) {
+    setMidiStatus(ui, 'Web MIDI unsupported');
+    return;
+  }
+  let access: MIDIAccess;
+  try {
+    access = await navigator.requestMIDIAccess({ sysex: false });
+  } catch (err) {
+    console.warn('[wclap-host] MIDI access denied', err);
+    setMidiStatus(ui, 'permission denied');
+    return;
+  }
+
+  const wire = (input: MIDIInput): void => {
+    input.onmidimessage = (ev) => {
+      flashMidiLed(ui); // any MIDI byte stream blinks the LED
+      const data = ev.data;
+      if (!data || data.length < 1) return;
+      const status = data[0] ?? 0;
+      const high = status & 0xf0;
+      const channel = status & 0x0f;
+      const key = data[1] ?? 0;
+      const velRaw = data[2] ?? 0;
+      // Note-on with velocity 0 is conventionally a note-off.
+      if (high === 0x90 && velRaw > 0) {
+        const velocity = velRaw / 127;
+        heldNotes.set(`${channel}:${key}`, { key, vel: velocity });
+        refreshMidiNotesUi();
+        fanoutEvent(encodeClapNoteEvent(true, channel, key, velocity));
+      } else if (high === 0x80 || (high === 0x90 && velRaw === 0)) {
+        if (heldNotes.delete(`${channel}:${key}`)) refreshMidiNotesUi();
+        fanoutEvent(encodeClapNoteEvent(false, channel, key, velRaw / 127));
+      }
+      // Other MIDI messages (CC, pitch-bend, aftertouch) — LED still blinks
+      // (see flashMidiLed above) but no CLAP event emitted at M4.
+    };
+  };
+
+  for (const input of access.inputs.values()) wire(input);
+  refreshMidiInputsLabel(access);
+  access.onstatechange = (ev) => {
+    const port = (ev as MIDIConnectionEvent).port;
+    if (port instanceof MIDIInput && port.state === 'connected') wire(port);
+    refreshMidiInputsLabel(access);
+  };
+
+  const count = access.inputs.size;
+  if (count > 0) {
+    console.log(`[wclap-host] Web MIDI: ${count} input(s) listening`);
+  }
 }

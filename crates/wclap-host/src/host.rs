@@ -30,6 +30,8 @@ pub(crate) struct HostStubIndices {
     pub(crate) events_in_size: u32,
     pub(crate) events_in_get: u32,
     pub(crate) events_out_try_push: u32,
+    // clap_host_webview.send — plugin → iframe push
+    pub(crate) host_webview_send: u32,
 }
 
 pub(crate) struct HostedPool {
