@@ -32,6 +32,14 @@ const SITE_SHELF = resolve(REPO_ROOT, 'apps/site/static/shelf.json');
 const REPO_TREE_BASE =
   'https://github.com/taluvi-dev/plinken-org/tree/main/plugins';
 
+// `has_ui` reflects whether the bundle ships any plugin GUI assets (i.e. an
+// HTML file inside the tar.gz). For multi-plugin bundles where only some
+// plugins have a UI, clients still need to probe per-plugin at runtime via
+// `clap.gui`; this is a fast hint, not authoritative per-plugin.
+//
+// `plugins` is omitted for the external bundles because we don't enumerate
+// their CLAP factory at build time. Vendors who land a plugin into this
+// repo can fill it in explicitly in their plugin.json.
 const EXTERNAL_EXAMPLES = [
   {
     id: 'signalsmith-basics',
@@ -39,6 +47,7 @@ const EXTERNAL_EXAMPLES = [
     file: 'signalsmith-basics.wclap.tar.gz',
     vendor: 'Signalsmith Audio',
     license: 'MIT',
+    has_ui: true,
     source:
       'https://github.com/WebCLAP/examples/tree/main/signalsmith-basics'
   },
@@ -48,6 +57,7 @@ const EXTERNAL_EXAMPLES = [
     file: 'signalsmith-clap-cpp.wclap.tar.gz',
     vendor: 'Signalsmith Audio',
     license: 'MIT',
+    has_ui: true,
     source:
       'https://github.com/WebCLAP/examples/tree/main/signalsmith-clap-cpp'
   },
@@ -57,6 +67,7 @@ const EXTERNAL_EXAMPLES = [
     file: 'clack-gain.wasm',
     vendor: 'clack',
     license: 'MIT OR Apache-2.0',
+    has_ui: false,
     source: 'https://github.com/WebCLAP/examples/tree/main/clack'
   },
   {
@@ -66,6 +77,7 @@ const EXTERNAL_EXAMPLES = [
     hint: 'needs MIDI',
     vendor: 'clack',
     license: 'MIT OR Apache-2.0',
+    has_ui: false,
     source: 'https://github.com/WebCLAP/examples/tree/main/clack'
   },
   {
@@ -74,12 +86,22 @@ const EXTERNAL_EXAMPLES = [
     file: 'as-clap-example.wclap.wasm',
     vendor: 'as-clap',
     license: 'BSL-1.0',
+    has_ui: false,
     source: 'https://github.com/WebCLAP/examples/tree/main/as-clap'
   }
 ];
 
-const REQUIRED = ['id', 'name', 'vendor', 'version', 'artifact', 'format'];
+const REQUIRED = [
+  'manifest_version',
+  'id',
+  'name',
+  'vendor',
+  'version',
+  'artifact',
+  'format'
+];
 const VALID_FORMATS = new Set(['wasm', 'tar.gz']);
+const SUPPORTED_MANIFEST_VERSION = 1;
 
 async function main() {
   // Each entry collected before being projected onto host- vs site-style URLs.
@@ -115,6 +137,13 @@ async function main() {
           errors += 1;
           continue;
         }
+        if (manifest.manifest_version !== SUPPORTED_MANIFEST_VERSION) {
+          console.error(
+            `  ✗ ${slug}: manifest_version ${manifest.manifest_version} not supported (this aggregator speaks version ${SUPPORTED_MANIFEST_VERSION})`
+          );
+          errors += 1;
+          continue;
+        }
         if (!VALID_FORMATS.has(manifest.format)) {
           console.error(`  ✗ ${slug}: format must be 'wasm' or 'tar.gz', got '${manifest.format}'`);
           errors += 1;
@@ -145,7 +174,9 @@ async function main() {
           license: manifest.license ?? null,
           homepage: manifest.homepage ?? null,
           source: `${REPO_TREE_BASE}/${vendor.name}/${plugin.name}`,
-          hint: manifest.hint ?? null
+          hint: manifest.hint ?? null,
+          has_ui: manifest.has_ui ?? null,
+          plugins: Array.isArray(manifest.plugins) ? manifest.plugins : null
         });
       }
     }
@@ -169,7 +200,9 @@ async function main() {
       license: ex.license,
       homepage: null,
       source: ex.source,
-      hint: ex.hint ?? null
+      hint: ex.hint ?? null,
+      has_ui: ex.has_ui ?? null,
+      plugins: null
     });
   }
 
@@ -193,13 +226,17 @@ async function main() {
   const siteItems = entries.map((e) => projectItem(e, `/wclap/${e.file}`));
 
   const generatedAt = new Date().toISOString();
+  const envelope = {
+    manifest_version: SUPPORTED_MANIFEST_VERSION,
+    generatedAt
+  };
   await writeFile(
     HOST_SHELF,
-    JSON.stringify({ generatedAt, items: hostItems }, null, 2) + '\n'
+    JSON.stringify({ ...envelope, items: hostItems }, null, 2) + '\n'
   );
   await writeFile(
     SITE_SHELF,
-    JSON.stringify({ generatedAt, items: siteItems }, null, 2) + '\n'
+    JSON.stringify({ ...envelope, items: siteItems }, null, 2) + '\n'
   );
 
   console.log(`\nWrote ${entries.length} item${entries.length === 1 ? '' : 's'} to:`);
@@ -226,6 +263,8 @@ function projectItem(entry, url) {
   if (entry.features?.length) item.features = entry.features;
   if (entry.homepage) item.homepage = entry.homepage;
   if (entry.hint) item.hint = entry.hint;
+  if (entry.has_ui != null) item.has_ui = entry.has_ui;
+  if (entry.plugins) item.plugins = entry.plugins;
   return item;
 }
 

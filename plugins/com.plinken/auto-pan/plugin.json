@@ -1,4 +1,5 @@
 {
+  "manifest_version": 1,
   "id": "com.plinken.auto-pan",
   "name": "Auto-Pan",
   "vendor": "Plinken",
@@ -9,5 +10,15 @@
   "homepage": "https://plinken.org",
   "source": "assembly/",
   "artifact": "dist/auto-pan.wclap.wasm",
-  "format": "wasm"
+  "format": "wasm",
+  "has_ui": false,
+  "plugins": [
+    {
+      "id": "com.plinken.auto-pan",
+      "name": "Auto-Pan",
+      "features": ["audio-effect", "utility"],
+      "has_ui": false
+    }
+  ]
 }
+

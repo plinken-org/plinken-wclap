@@ -1,5 +1,6 @@
 {
-  "generatedAt": "2026-05-14T06:17:43.867Z",
+  "manifest_version": 1,
+  "generatedAt": "2026-05-14T06:28:16.843Z",
   "items": [
     {
       "id": "com.plinken.auto-pan",
@@ -14,7 +15,19 @@
         "audio-effect",
         "utility"
       ],
-      "homepage": "https://plinken.org"
+      "homepage": "https://plinken.org",
+      "has_ui": false,
+      "plugins": [
+        {
+          "id": "com.plinken.auto-pan",
+          "name": "Auto-Pan",
+          "features": [
+            "audio-effect",
+            "utility"
+          ],
+          "has_ui": false
+        }
+      ]
     },
     {
       "id": "signalsmith-basics",
@@ -22,7 +35,8 @@
       "url": "/wclap/signalsmith-basics.wclap.tar.gz",
       "vendor": "Signalsmith Audio",
       "license": "MIT",
-      "source": "https://github.com/WebCLAP/examples/tree/main/signalsmith-basics"
+      "source": "https://github.com/WebCLAP/examples/tree/main/signalsmith-basics",
+      "has_ui": true
     },
     {
       "id": "signalsmith-clap-cpp",
@@ -30,7 +44,8 @@
       "url": "/wclap/signalsmith-clap-cpp.wclap.tar.gz",
       "vendor": "Signalsmith Audio",
       "license": "MIT",
-      "source": "https://github.com/WebCLAP/examples/tree/main/signalsmith-clap-cpp"
+      "source": "https://github.com/WebCLAP/examples/tree/main/signalsmith-clap-cpp",
+      "has_ui": true
     },
     {
       "id": "clack-gain",
@@ -38,7 +53,8 @@
       "url": "/wclap/clack-gain.wasm",
       "vendor": "clack",
       "license": "MIT OR Apache-2.0",
-      "source": "https://github.com/WebCLAP/examples/tree/main/clack"
+      "source": "https://github.com/WebCLAP/examples/tree/main/clack",
+      "has_ui": false
     },
     {
       "id": "clack-polysynth",
@@ -47,7 +63,8 @@
       "vendor": "clack",
       "license": "MIT OR Apache-2.0",
       "source": "https://github.com/WebCLAP/examples/tree/main/clack",
-      "hint": "needs MIDI"
+      "hint": "needs MIDI",
+      "has_ui": false
     },
     {
       "id": "as-clap",
@@ -55,7 +72,8 @@
       "url": "/wclap/as-clap-example.wclap.wasm",
       "vendor": "as-clap",
       "license": "BSL-1.0",
-      "source": "https://github.com/WebCLAP/examples/tree/main/as-clap"
+      "source": "https://github.com/WebCLAP/examples/tree/main/as-clap",
+      "has_ui": false
     }
   ]
 }
