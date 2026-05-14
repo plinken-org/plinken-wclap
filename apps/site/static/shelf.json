@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "generatedAt": "2026-05-14T06:28:16.843Z",
+  "generatedAt": "2026-05-14T09:05:41.465Z",
   "items": [
     {
       "id": "com.plinken.auto-pan",
@@ -17,6 +17,16 @@
       ],
       "homepage": "https://plinken.org",
       "has_ui": false,
+      "ui": {
+        "compact_size": {
+          "width": 260,
+          "height": 56
+        },
+        "expanded_size": {
+          "width": 360,
+          "height": 220
+        }
+      },
       "plugins": [
         {
           "id": "com.plinken.auto-pan",

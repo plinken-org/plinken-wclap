@@ -34,7 +34,14 @@ interface ShelfItem {
   homepage?: string | null;
   source?: string;
   hint?: string;
+  ui?: {
+    compact_size?: { width: number; height: number };
+    expanded_size?: { width: number; height: number };
+  };
 }
+
+type PanelSize = { width: number; height: number };
+type PanelMode = 'compact' | 'expanded';
 
 // Fetched from /shelf.json at boot. Aggregator script
 // (apps/wclap-host/scripts/build-shelf.mjs) generates it from every
@@ -58,6 +65,9 @@ interface Slot {
   pluginIndex: number;
   /** Original source — used to reload with a different pluginIndex on cycle. */
   source: SlotSource;
+  /** Manifest-declared panel sizes, if any. Pixel values. */
+  compactSize: PanelSize | null;
+  expandedSize: PanelSize | null;
 }
 
 function emptySlot(): Slot {
@@ -69,7 +79,9 @@ function emptySlot(): Slot {
     hasUi: false,
     plugins: [],
     pluginIndex: 0,
-    source: null
+    source: null,
+    compactSize: null,
+    expandedSize: null
   };
 }
 
@@ -106,7 +118,7 @@ ui.stopBtn.addEventListener('click', () => void onStop());
 
 renderRack();
 wirePluginModal();
-void registerPluginProxy();
+const proxyReady = registerPluginProxy();
 void loadShelf();
 
 async function loadShelf(): Promise<void> {
@@ -406,6 +418,11 @@ async function loadIntoSlot(
       typeof (effect as { openInterface?: unknown }).openInterface ===
       'function';
 
+    const shelfItem =
+      typeof source === 'string'
+        ? SHELF.find((s) => s.url === source)
+        : undefined;
+
     slots[idx] = {
       effect,
       node,
@@ -417,7 +434,9 @@ async function loadIntoSlot(
       source:
         typeof source === 'string'
           ? { kind: 'url', url: source }
-          : { kind: 'file', file: source }
+          : { kind: 'file', file: source },
+      compactSize: shelfItem?.ui?.compact_size ?? null,
+      expandedSize: shelfItem?.ui?.expanded_size ?? null
     };
     pendingBlobUrl = null; // ownership transferred to the slot
     rewire();
@@ -484,9 +503,23 @@ function renderRack(): void {
     label.textContent = occupied ? slot.label : 'drop a plugin here';
     if (occupied && slot.hasUi) {
       label.title = 'Click to open plugin UI';
-      label.addEventListener('click', () => openPluginUi(idx));
+      label.addEventListener('click', () => void openPluginUi(idx, 'expanded'));
     }
     slotEl.appendChild(label);
+
+    if (occupied && slot.hasUi) {
+      const stripBtn = document.createElement('button');
+      stripBtn.type = 'button';
+      stripBtn.className = 'slotStrip';
+      stripBtn.textContent = 'strip';
+      stripBtn.title = 'Open compact (strip) view';
+      stripBtn.disabled = !slot.compactSize;
+      stripBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void openPluginUi(idx, 'compact');
+      });
+      slotEl.appendChild(stripBtn);
+    }
 
     if (occupied && slot.plugins.length > 1) {
       const cycle = document.createElement('span');
@@ -710,6 +743,10 @@ function startTouchDrag(item: ShelfItem, startEvent: PointerEvent): void {
 const PROXY_PREFIX = '/plugin-proxy';
 type ProxyRequest = (path: string) => Promise<ArrayBuffer | null>;
 const proxyResolvers = new Map<number, ProxyRequest>();
+// One panel per slot. Switching mode (expanded ↔ compact) closes and reopens.
+// The underlying runtime (`clap-audionode.mjs`) tracks only one iframe per
+// plugin in its closure, so two simultaneous panels for the same slot would
+// orphan the first one's message routing.
 const openPanels = new Map<number, HTMLElement>();
 let panelCascade = 0;
 
@@ -725,7 +762,15 @@ function wirePluginModal(): void {
   });
 }
 
-function openPluginUi(idx: number): void {
+async function openPluginUi(
+  idx: number,
+  mode: PanelMode = 'expanded'
+): Promise<void> {
+  // The iframe URL falls under the plugin-proxy SW scope. If the iframe is
+  // created before the SW activates, the navigation goes to the network and
+  // hits the SPA fallback instead of the resolver. Block until the SW is up.
+  await proxyReady;
+
   const slot = slots[idx];
   if (!slot || !slot.effect) return;
   const openInterface = (
@@ -736,25 +781,43 @@ function openPluginUi(idx: number): void {
     return;
   }
 
+  // One panel per slot. If a panel is already open for this slot and it's
+  // already in the requested mode, just bring it to front. If it's the other
+  // mode, close it first so the runtime can recreate the iframe at the new size.
   const existing = openPanels.get(idx);
   if (existing) {
-    bringPanelToFront(existing);
-    return;
+    if (existing.dataset.panelMode === mode) {
+      bringPanelToFront(existing);
+      return;
+    }
+    closePluginUi(idx);
   }
 
-  // Register this slot as the proxy source for any plugin-proxy paths it owns.
+  // Upstream `getWclap()` rewrites `pluginPath` to `/plugin/<hash>-copy-<hex>`,
+  // and keys the files map off that mutated path. The webview URL inside the
+  // plugin info still references the original `/plugin/<hash>/...`, so the
+  // iframe will ask for the un-mutated path. Compute the prefix mapping once
+  // here so each request is an O(1) direct lookup.
+  const effectAny = slot.effect as {
+    getFile?: (p: string) => Promise<unknown>;
+    files?: Record<string, unknown>;
+  };
+  const sampleKey = effectAny.files ? Object.keys(effectAny.files)[0] : undefined;
+  const mutatedPrefix = sampleKey?.match(/^\/plugin\/[^/]+/)?.[0] ?? '';
+  const originalPrefix = mutatedPrefix.replace(/-copy-[0-9a-fA-F]+$/, '');
+
   proxyResolvers.set(idx, async (path) => {
-    const getFile = (slot.effect as { getFile?: (p: string) => Promise<unknown> })
-      .getFile;
+    const getFile = effectAny.getFile;
     if (typeof getFile !== 'function') return null;
 
-    // Upstream `getWclap()` mutates `pluginPath` on its second pass, appending
-    // `-copy-<random>` — but the files map is keyed off the original prefix.
-    // Try the literal path first, then strip the `-copy-<hex>` segment.
     let raw = await getFile(path);
-    if (!raw) {
-      const stripped = path.replace(/-copy-[0-9a-fA-F]+(?=\/)/, '');
-      if (stripped !== path) raw = await getFile(stripped);
+    if (
+      !raw &&
+      originalPrefix &&
+      mutatedPrefix !== originalPrefix &&
+      path.startsWith(originalPrefix + '/')
+    ) {
+      raw = await getFile(mutatedPrefix + path.slice(originalPrefix.length));
     }
 
     if (raw instanceof ArrayBuffer) return raw;
@@ -773,7 +836,10 @@ function openPluginUi(idx: number): void {
     return null;
   });
 
-  const result = openInterface({ resourcePrefix: PROXY_PREFIX });
+  const result = openInterface({
+    resourcePrefix: PROXY_PREFIX,
+    filePrefix: PROXY_PREFIX,
+  });
   if (!(result instanceof HTMLIFrameElement)) {
     setStatus(ui, `Slot ${idx + 1}: plugin UI didn't return an iframe.`);
     proxyResolvers.delete(idx);
@@ -783,11 +849,37 @@ function openPluginUi(idx: number): void {
   const container = document.getElementById('pluginPanels');
   if (!container) return;
 
-  const panel = buildPluginPanel(idx, slot.label, result);
+  const panel = buildPluginPanel(idx, mode, slot.label, result);
+  applyPanelSize(panel, modeSize(slot, mode));
   positionPanel(panel);
   container.appendChild(panel);
   openPanels.set(idx, panel);
   wirePanelDrag(panel);
+}
+
+// Plugins declare preferred panel sizes via `ui.compact_size` / `ui.expanded_size`
+// in `plugin.json`. The host clamps so a runaway value can't escape the viewport,
+// and adds the header chrome height on top of the plugin's body height.
+const PANEL_MIN_W = 140;
+const PANEL_MIN_H = 60;
+const PANEL_HEADER_PX = 40;
+
+function modeSize(slot: Slot, mode: PanelMode): PanelSize | null {
+  return mode === 'compact' ? slot.compactSize : slot.expandedSize;
+}
+
+function applyPanelSize(panel: HTMLElement, size: PanelSize | null): void {
+  if (!size) {
+    panel.style.width = '';
+    panel.style.height = '';
+    return;
+  }
+  const maxW = Math.floor(window.innerWidth * 0.9);
+  const maxH = Math.floor(window.innerHeight * 0.85);
+  const w = Math.min(Math.max(size.width, PANEL_MIN_W), maxW);
+  const h = Math.min(Math.max(size.height + PANEL_HEADER_PX, PANEL_MIN_H), maxH);
+  panel.style.width = `${w}px`;
+  panel.style.height = `${h}px`;
 }
 
 function closePluginUi(idx?: number): void {
@@ -815,19 +907,24 @@ function closePluginUi(idx?: number): void {
 
 function buildPluginPanel(
   idx: number,
+  mode: PanelMode,
   label: string,
   iframe: HTMLIFrameElement
 ): HTMLElement {
   const panel = document.createElement('div');
-  panel.className = 'pluginPanel';
+  panel.className = `pluginPanel pluginPanel--${mode}`;
   panel.dataset.slotIndex = String(idx);
+  panel.dataset.panelMode = mode;
 
   const header = document.createElement('header');
   header.className = 'pluginPanelHead';
 
   const title = document.createElement('span');
   title.className = 'pluginPanelTitle';
-  title.textContent = `${label} · slot ${idx + 1}`;
+  title.textContent =
+    mode === 'compact'
+      ? `${label} · ${idx + 1} · strip`
+      : `${label} · slot ${idx + 1}`;
   header.appendChild(title);
 
   const close = document.createElement('button');
@@ -921,10 +1018,24 @@ function wirePanelDrag(panel: HTMLElement): void {
 async function registerPluginProxy(): Promise<void> {
   if (!('serviceWorker' in navigator)) return;
   try {
-    await navigator.serviceWorker.register('/plugin-proxy-sw.js', {
+    const reg = await navigator.serviceWorker.register('/plugin-proxy-sw.js', {
       scope: '/plugin-proxy/'
     });
-    await navigator.serviceWorker.ready;
+    // `navigator.serviceWorker.ready` only resolves for a SW that controls
+    // *this* document. Our SW is scoped to /plugin-proxy/ but the page is at
+    // /, so `.ready` never fires. Wait on the registration's own state.
+    if (!reg.active) {
+      const sw = reg.installing ?? reg.waiting;
+      if (sw) {
+        await new Promise<void>((resolve) => {
+          const check = () => {
+            if (sw.state === 'activated') resolve();
+          };
+          sw.addEventListener('statechange', check);
+          check();
+        });
+      }
+    }
   } catch (err) {
     console.warn('[wclap-host] plugin-proxy SW registration failed', err);
     return;
@@ -935,9 +1046,6 @@ async function registerPluginProxy(): Promise<void> {
       | { type: string; id: number; path: string }
       | undefined;
     if (!data || data.type !== 'plugin-proxy-request') return;
-    // The top-level page registered the SW but lives outside the SW scope,
-    // so `navigator.serviceWorker.controller` is null. Reply via the source
-    // of the message (the SW itself), which works regardless of control.
     const source = event.source;
     if (!(source instanceof ServiceWorker)) return;
     void respondProxy(source, data.id, data.path);

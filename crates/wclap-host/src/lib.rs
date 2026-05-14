@@ -1,16 +1,20 @@
-//! WCLAP host — load CLAP plugins compiled to wasm32 inside a Rust audio
-//! engine via wasmtime.
-//!
-//! See `README.md` for the goal and `docs/implementation-plan.md` for the
-//! spine. This crate is at **M1** (first sound) — the public API will
-//! stabilise around M3.
+#![cfg_attr(target_arch = "wasm32", no_std)]
+extern crate alloc;
 
-mod engine;
-mod bundle;
-mod error;
-mod imports;
-mod wasi;
+#[cfg(target_arch = "wasm32")]
+#[global_allocator]
+static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
 
-pub use engine::Engine;
-pub use bundle::Bundle;
-pub use error::{Error, Result};
+#[cfg(target_arch = "wasm32")]
+#[panic_handler]
+fn panic(_: &core::panic::PanicInfo) -> ! {
+    core::arch::wasm32::unreachable()
+}
+
+#[cfg(target_arch = "wasm32")]
+mod instance;
+
+mod bytes;
+mod call;
+mod clap;
+mod host;

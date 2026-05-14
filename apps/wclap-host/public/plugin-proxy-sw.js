@@ -35,7 +35,10 @@ async function handle(event, innerPath) {
   const client =
     windows.find((c) => c.frameType === 'top-level') ?? windows[0];
   if (!client) {
-    return new Response('plugin-proxy: no client', { status: 503 });
+    return new Response('plugin-proxy: no client', {
+      status: 503,
+      headers: PROXY_HEADERS
+    });
   }
 
   const id = nextId++;
@@ -51,18 +54,26 @@ async function handle(event, innerPath) {
   pending.delete(id);
 
   if (!result || !result.body) {
-    return new Response('plugin-proxy: not found', { status: 404 });
+    return new Response('plugin-proxy: not found', {
+      status: 404,
+      headers: PROXY_HEADERS
+    });
   }
   return new Response(result.body, {
     headers: {
       'Content-Type': result.mime || 'application/octet-stream',
-      // Inherit cross-origin isolation from the host page so the iframe can
-      // use SharedArrayBuffer if the plugin's JS needs it.
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-      'Cross-Origin-Resource-Policy': 'same-origin'
+      ...PROXY_HEADERS
     }
   });
 }
+
+// Inherit cross-origin isolation from the host page so the iframe can use
+// SharedArrayBuffer if the plugin's JS needs it. Every response from this
+// SW — 200, 404, 503 — must carry these or it'll fail COEP=require-corp.
+const PROXY_HEADERS = {
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+  'Cross-Origin-Resource-Policy': 'same-origin'
+};
 
 self.addEventListener('message', (event) => {
   const data = event.data;

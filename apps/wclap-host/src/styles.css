@@ -254,6 +254,28 @@ h1 {
   color: var(--accent-warn);
   background: rgba(217, 122, 91, 0.08);
 }
+.slotStrip {
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.4rem;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.slotStrip:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.slotStrip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 
 .shelf {
   display: flex;

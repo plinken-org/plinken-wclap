@@ -12,6 +12,10 @@
   "artifact": "dist/auto-pan.wclap.wasm",
   "format": "wasm",
   "has_ui": false,
+  "ui": {
+    "compact_size":  { "width": 260, "height": 56 },
+    "expanded_size": { "width": 360, "height": 220 }
+  },
   "plugins": [
     {
       "id": "com.plinken.auto-pan",

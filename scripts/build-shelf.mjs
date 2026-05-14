@@ -176,6 +176,7 @@ async function main() {
           source: `${REPO_TREE_BASE}/${vendor.name}/${plugin.name}`,
           hint: manifest.hint ?? null,
           has_ui: manifest.has_ui ?? null,
+          ui: validateUi(slug, manifest.ui),
           plugins: Array.isArray(manifest.plugins) ? manifest.plugins : null
         });
       }
@@ -202,6 +203,7 @@ async function main() {
       source: ex.source,
       hint: ex.hint ?? null,
       has_ui: ex.has_ui ?? null,
+      ui: null,
       plugins: null
     });
   }
@@ -264,8 +266,43 @@ function projectItem(entry, url) {
   if (entry.homepage) item.homepage = entry.homepage;
   if (entry.hint) item.hint = entry.hint;
   if (entry.has_ui != null) item.has_ui = entry.has_ui;
+  if (entry.ui) item.ui = entry.ui;
   if (entry.plugins) item.plugins = entry.plugins;
   return item;
+}
+
+// Plugins can declare two panel sizes:
+//   - `compact_size`   — strip-style mini view (Bitwig device-strip pattern).
+//   - `expanded_size`  — full plugin window.
+// Both are pixel pairs; missing or malformed entries are dropped with a warning
+// rather than aborting the build. The host falls back to its CSS clamp when no
+// size is provided.
+function validateUi(slug, ui) {
+  if (ui == null) return null;
+  if (typeof ui !== 'object') {
+    console.warn(`  ⚠ ${slug}: \`ui\` must be an object; ignoring`);
+    return null;
+  }
+  const out = {};
+  const compact = pickSize(slug, 'compact_size', ui.compact_size);
+  const expanded = pickSize(slug, 'expanded_size', ui.expanded_size);
+  if (compact) out.compact_size = compact;
+  if (expanded) out.expanded_size = expanded;
+  return Object.keys(out).length ? out : null;
+}
+
+function pickSize(slug, fieldName, value) {
+  if (value == null) return null;
+  if (typeof value !== 'object') {
+    console.warn(`  ⚠ ${slug}: \`ui.${fieldName}\` must be an object; ignoring`);
+    return null;
+  }
+  const { width: w, height: h } = value;
+  if (!Number.isInteger(w) || w <= 0 || !Number.isInteger(h) || h <= 0) {
+    console.warn(`  ⚠ ${slug}: \`ui.${fieldName}\` needs positive integer width/height; ignoring`);
+    return null;
+  }
+  return { width: w, height: h };
 }
 
 main().catch((err) => {
