@@ -1114,6 +1114,45 @@ pub extern "C" fn pluginGetInfo(plugin_handle: u32, bytes_handle: u32) -> u32 {
     }
 }
 
+/// `pluginLatency(pluginHandle) -> u32`
+///
+/// Reports the plugin's processing latency in samples. Asks the plugin for
+/// its `clap.latency` extension, then calls its single `get(plugin)` entry
+/// — returning 0 when the extension isn't advertised (i.e. zero-latency
+/// plugins per CLAP convention). Hosts use this to compensate parallel
+/// chains and to display a per-plugin latency readout.
+#[no_mangle]
+pub extern "C" fn pluginLatency(plugin_handle: u32) -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        let (inst, plugin_ptr) = {
+            let p = get(plugin_handle);
+            (p.instance_handle, p.plugin_ptr)
+        };
+        let lat_ext = plugin_get_extension(inst, plugin_ptr, clap::EXT_LATENCY);
+        if lat_ext == 0 {
+            return 0;
+        }
+        let mut arg = [0u8; SLOT_SIZE];
+        let mut result = [0u8; SLOT_SIZE];
+        write_arg_u32(&mut arg, plugin_ptr);
+        call32(
+            inst,
+            lat_ext + clap::latency::GET as u32,
+            1,
+            result.as_mut_ptr(),
+            arg.as_ptr(),
+            1,
+        );
+        read_result_u32(&result)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = plugin_handle;
+        0
+    }
+}
+
 /// `pluginMessage(pluginHandle, bytesHandle) -> u32`
 ///
 /// Iframe → plugin direction of the webview channel. JS hands us a bytes-

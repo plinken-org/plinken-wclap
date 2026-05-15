@@ -13,7 +13,12 @@ export interface IframeBridgeOptions {
 
 export class IframeBridge {
   private readonly opts: IframeBridgeOptions;
-  private readonly windowToSlot = new WeakMap<Window, number>();
+  /** Slot → iframe element. We resolve `contentWindow` lazily on each
+   *  incoming message rather than caching it: when `register()` runs the
+   *  iframe may not be in the DOM yet, so its contentWindow is null and
+   *  any WeakMap would stay empty. Cross-referencing by element avoids
+   *  the timing race. */
+  private readonly registered = new Map<number, HTMLIFrameElement>();
 
   constructor(opts: IframeBridgeOptions) {
     this.opts = opts;
@@ -21,14 +26,11 @@ export class IframeBridge {
   }
 
   register(slot: number, iframe: HTMLIFrameElement): void {
-    // The iframe's contentWindow is only available after load; capture it
-    // eagerly via the load event AND now in case it's already navigated.
-    const link = () => {
-      const w = iframe.contentWindow;
-      if (w) this.windowToSlot.set(w, slot);
-    };
-    link();
-    iframe.addEventListener('load', link);
+    this.registered.set(slot, iframe);
+  }
+
+  unregister(slot: number): void {
+    this.registered.delete(slot);
   }
 
   /** Plugin → iframe push. Worklet message routed here by slot. */
@@ -45,14 +47,27 @@ export class IframeBridge {
   private onWindowMessage = (e: MessageEvent): void => {
     const src = e.source as Window | null;
     if (!src) return;
-    const slot = this.windowToSlot.get(src);
+    // Resolve slot by comparing source against each registered iframe's
+    // contentWindow at message time. Same-origin iframes have a valid
+    // contentWindow once they're in the DOM, which is before any inline
+    // script in the iframe can fire postMessage.
+    let slot: number | null = null;
+    for (const [s, iframe] of this.registered) {
+      if (iframe.contentWindow === src) {
+        slot = s;
+        break;
+      }
+    }
     if (slot == null) return;
     const data = e.data;
     if (data instanceof ArrayBuffer) {
+      console.log(`[iframe-bridge] slot ${slot} → plugin: ${data.byteLength}b`);
       this.opts.port.postMessage(
         { kind: 'plugin-msg', slot, buf: data },
         [data]
       );
+    } else {
+      console.log(`[iframe-bridge] slot ${slot} sent non-ArrayBuffer:`, data);
     }
   };
 }

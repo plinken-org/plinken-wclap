@@ -24,7 +24,10 @@ import {
   setAudioState,
   showError,
   clearError,
-  setMeters
+  setMeters,
+  flashMidiLed,
+  setMidiStatus,
+  setMidiNotes
 } from './ui';
 
 // ---------------------------------------------------------------------------
@@ -34,6 +37,8 @@ import {
 const NUM_SLOTS = 5;
 const SHELF_DT_TYPE = 'application/x-plinken-shelf-id';
 const PROXY_PREFIX = '/plugin-proxy';
+/** Tone-source gain when active. 10^(-10/20) ≈ -10 dBFS peak into the chain. */
+const TONE_LEVEL_GAIN = 0.31623;
 
 interface ShelfItem {
   id: string;
@@ -47,6 +52,12 @@ interface ShelfItem {
   manifest?: WclapManifest;
 }
 
+interface BundlePlugin {
+  id: string;
+  name?: string;
+  vendor?: string;
+}
+
 interface Slot {
   index: number;
   url: string | null;
@@ -57,6 +68,20 @@ interface Slot {
   bypass: boolean;
   iframe: HTMLIFrameElement | null;
   panel: HTMLElement | null;
+  /** All plugins in this slot's bundle — surfaced by the worklet at load. */
+  plugins: BundlePlugin[];
+  /** Index into `plugins` for the currently active plugin. */
+  pluginIndex: number;
+  /**
+   * URI the plugin's `webview.get_uri` returned (file:/plugin/<hash>/...).
+   * Null when the plugin doesn't advertise the `clap.webview/3` extension —
+   * authoritative signal that the plugin has no UI.
+   */
+  webviewUri: string | null;
+  /** pluginPath the loader gave wclap-host-js (e.g. /plugin/<hash>). */
+  pluginPath: string | null;
+  /** Latency reported by the plugin's clap.latency extension (samples). */
+  latencySamples: number | null;
 }
 
 const slots: Slot[] = Array.from({ length: NUM_SLOTS }, (_, i) => ({
@@ -68,7 +93,12 @@ const slots: Slot[] = Array.from({ length: NUM_SLOTS }, (_, i) => ({
   label: '',
   bypass: false,
   iframe: null,
-  panel: null
+  panel: null,
+  plugins: [],
+  pluginIndex: 0,
+  webviewUri: null,
+  pluginPath: null,
+  latencySamples: null
 }));
 
 let SHELF: ShelfItem[] = [];
@@ -175,7 +205,7 @@ async function ensureBaseGraph(): Promise<BaseGraph> {
   // noise during the switch.
   const toneGain = ctx.createGain();
   const micGain = ctx.createGain();
-  toneGain.gain.value = sourceMode === 'tone' ? 1 : 0;
+  toneGain.gain.value = sourceMode === 'tone' ? TONE_LEVEL_GAIN : 0;
   micGain.gain.value = sourceMode === 'mic' ? 1 : 0;
   merger.connect(toneGain);
 
@@ -333,6 +363,8 @@ function minimalHostImports() {
 }
 
 let iframeBridge: IframeBridge | null = null;
+let webviewMsgCount = 0;
+let lastWebviewLogAt = 0;
 
 const pendingRequests = new Map<number, (data: unknown) => void>();
 let nextRequestId = 1;
@@ -358,7 +390,21 @@ function onWorkletMessage(e: MessageEvent): void {
     console.log(data.msg);
     return;
   }
-  console.log('[host] worklet →', data.kind, data);
+  // Skip the per-snapshot webview channel — fires ~30 Hz per plugin and
+  // floods devtools if logged. Everything else is sporadic, so log it.
+  if (data.kind !== 'webview') {
+    console.log('[host] worklet →', data.kind, data);
+  } else {
+    // Sample-print one webview byte-length per second, so we can confirm
+    // plugin→iframe traffic is flowing without flooding devtools.
+    webviewMsgCount++;
+    const now = Date.now();
+    if (now - lastWebviewLogAt > 1000) {
+      console.log(`[host] webview msgs in last sec: ${webviewMsgCount} (this one: ${(data.buf as ArrayBuffer)?.byteLength}b → slot ${data.slot})`);
+      webviewMsgCount = 0;
+      lastWebviewLogAt = now;
+    }
+  }
   if (data.kind === 'worklet-alive') {
     setStatus(ui, `Worklet alive (${data.at}). Waiting for host…`);
     return;
@@ -402,6 +448,30 @@ function onWorkletMessage(e: MessageEvent): void {
       }
       break;
     }
+    case 'state-saved': {
+      const resolver = pendingRequests.get(data.requestId as number);
+      if (resolver) {
+        pendingRequests.delete(data.requestId as number);
+        resolver({ ok: data.ok, buf: data.buf });
+      }
+      break;
+    }
+    case 'state-loaded': {
+      const resolver = pendingRequests.get(data.requestId as number);
+      if (resolver) {
+        pendingRequests.delete(data.requestId as number);
+        resolver({ ok: data.ok });
+      }
+      break;
+    }
+    case 'latency': {
+      const resolver = pendingRequests.get(data.requestId as number);
+      if (resolver) {
+        pendingRequests.delete(data.requestId as number);
+        resolver(data.latency);
+      }
+      break;
+    }
     case 'crashed':
       showError(ui, new Error(`chain crashed: ${data.error}`));
       break;
@@ -414,16 +484,28 @@ function onWorkletMessage(e: MessageEvent): void {
 function onLoadedFromWorklet(data: {
   slot: number;
   pluginId: string;
-  info?: { desc?: { name?: string; vendor?: string } };
+  info?: { desc?: { name?: string; vendor?: string }; webview?: string | null };
+  bundlePlugins?: BundlePlugin[];
 }): void {
   const slot = slots[data.slot];
   if (!slot) return;
   slot.pluginId = data.pluginId;
+  slot.plugins = Array.isArray(data.bundlePlugins) ? data.bundlePlugins : [];
+  const foundIndex = slot.plugins.findIndex((p) => p.id === data.pluginId);
+  slot.pluginIndex = foundIndex >= 0 ? foundIndex : 0;
+  // `info.webview` is the authoritative URI the plugin returned from its
+  // clap.webview/3 extension. Null means the plugin has no UI at all
+  // (extension not advertised). This is what differentiates the keyboard
+  // plugin from the chorus plugin inside the signalsmith-clap-cpp bundle.
+  slot.webviewUri = data.info?.webview ?? null;
   const name = data.info?.desc?.name ?? slot.manifest?.name ?? data.pluginId;
   slot.label = name;
   refreshPluginSummary();
   renderRack();
   setStatus(ui, `${name} loaded in slot ${data.slot + 1}.`);
+  // Latency may need a fresh read; the plugin reports it through
+  // clap.latency.get and we render it in the rack strip.
+  void refreshLatency(data.slot);
 }
 
 // ---------------------------------------------------------------------------
@@ -485,7 +567,7 @@ async function setSourceMode(mode: SourceMode): Promise<void> {
 
   sourceMode = mode;
   if (baseGraph) {
-    baseGraph.toneGain.gain.value = mode === 'tone' ? 1 : 0;
+    baseGraph.toneGain.gain.value = mode === 'tone' ? TONE_LEVEL_GAIN : 0;
     baseGraph.micGain.gain.value = mode === 'mic' ? 1 : 0;
   }
   updateSourceUi();
@@ -823,8 +905,13 @@ function renderRack(): void {
   ui.rack.innerHTML = '';
   slots.forEach((slot, idx) => {
     const occupied = !!slot.pluginId;
+    // Authoritative UI signal — the plugin's clap.webview/3.get_uri call
+    // (forwarded through pluginGetInfo) is the only thing that knows
+    // whether a given plugin in a (potentially multi-plugin) bundle has a
+    // UI. We treat presence of a non-empty URI as the source of truth.
+    const hasUi = occupied && !!slot.webviewUri;
     const slotEl = document.createElement('div');
-    slotEl.className = `rackSlot ${occupied ? 'occupied' : 'empty'}`;
+    slotEl.className = `rackSlot ${occupied ? 'occupied' : 'empty'}${hasUi ? ' hasUi' : ''}`;
     slotEl.dataset.slotIndex = String(idx);
 
     const num = document.createElement('span');
@@ -841,6 +928,22 @@ function renderRack(): void {
     }
     slotEl.appendChild(label);
 
+    if (hasUi) {
+      const stripBtn = document.createElement('button');
+      stripBtn.type = 'button';
+      stripBtn.className = 'slotStrip';
+      stripBtn.textContent = 'strip';
+      stripBtn.title = slot.manifest?.ui?.compact_size
+        ? 'Open compact (strip) view'
+        : 'Plugin manifest has no ui.compact_size';
+      stripBtn.disabled = !slot.manifest?.ui?.compact_size;
+      stripBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void openPluginUi(idx, 'compact');
+      });
+      slotEl.appendChild(stripBtn);
+    }
+
     if (occupied) {
       const autoBtn = document.createElement('button');
       autoBtn.type = 'button';
@@ -853,6 +956,28 @@ function renderRack(): void {
       });
       slotEl.appendChild(autoBtn);
 
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button';
+      saveBtn.className = 'slotStrip slotState';
+      saveBtn.textContent = 'save';
+      saveBtn.title = 'Copy plugin state to clipboard (base64)';
+      saveBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void copyStateToClipboard(idx);
+      });
+      slotEl.appendChild(saveBtn);
+
+      const loadBtn = document.createElement('button');
+      loadBtn.type = 'button';
+      loadBtn.className = 'slotStrip slotState';
+      loadBtn.textContent = 'load';
+      loadBtn.title = 'Load plugin state from clipboard (base64)';
+      loadBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void loadStateFromClipboard(idx);
+      });
+      slotEl.appendChild(loadBtn);
+
       const bypassBtn = document.createElement('button');
       bypassBtn.type = 'button';
       bypassBtn.className = 'slotStrip slotBypass';
@@ -864,6 +989,62 @@ function renderRack(): void {
         toggleBypass(idx);
       });
       slotEl.appendChild(bypassBtn);
+
+      // Latency readout — `clap.latency.get` in samples. Shown as `Nsmp`,
+      // or `—` when the plugin reports 0 / hasn't been queried yet.
+      const lat = document.createElement('span');
+      lat.className = 'slotLatency';
+      const samples = slot.latencySamples;
+      lat.textContent = samples == null
+        ? '—'
+        : samples === 0
+          ? '0smp'
+          : `${samples}smp`;
+      lat.title = samples == null
+        ? 'Plugin latency not yet queried'
+        : `Plugin reports ${samples} samples of processing latency`;
+      slotEl.appendChild(lat);
+
+      // Plugin cycle widget — only when this bundle holds more than one
+      // plugin. Lets the user step through e.g. signalsmith-basics's six.
+      // Sits to the left of the delete button so delete always lives at
+      // the far right of the slot row.
+      if (slot.plugins.length > 1) {
+        const cycle = document.createElement('span');
+        cycle.className = 'slotCycle';
+        const total = slot.plugins.length;
+
+        const prev = document.createElement('button');
+        prev.type = 'button';
+        prev.className = 'slotCycleBtn';
+        prev.textContent = '◀';
+        prev.title = 'Previous plugin in bundle';
+        prev.setAttribute('aria-label', 'Previous plugin in bundle');
+        prev.addEventListener('click', (e) => {
+          e.stopPropagation();
+          void cycleSlot(idx, -1);
+        });
+
+        const count = document.createElement('span');
+        count.className = 'slotCycleCount';
+        count.textContent = `${slot.pluginIndex + 1}/${total}`;
+
+        const next = document.createElement('button');
+        next.type = 'button';
+        next.className = 'slotCycleBtn';
+        next.textContent = '▶';
+        next.title = 'Next plugin in bundle';
+        next.setAttribute('aria-label', 'Next plugin in bundle');
+        next.addEventListener('click', (e) => {
+          e.stopPropagation();
+          void cycleSlot(idx, 1);
+        });
+
+        cycle.appendChild(prev);
+        cycle.appendChild(count);
+        cycle.appendChild(next);
+        slotEl.appendChild(cycle);
+      }
 
       const del = document.createElement('button');
       del.className = 'slotDelete';
@@ -918,11 +1099,125 @@ function toggleBypass(idx: number): void {
   renderRack();
 }
 
+// State save / load — opaque plugin bytes round-tripped through base64 in
+// the clipboard. The bytes themselves are the plugin's own format; the host
+// makes no attempt to parse them. base64 just lets the user paste into any
+// text field.
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
+function base64ToBytes(str: string): Uint8Array {
+  const trimmed = str.replace(/\s+/g, '');
+  const binary = atob(trimmed);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+async function copyStateToClipboard(idx: number): Promise<void> {
+  const slot = slots[idx];
+  if (!slot.pluginId) return;
+  try {
+    const res = await workletRequest<{ ok: boolean; buf: ArrayBuffer | null }>(
+      'save-state',
+      { slot: idx }
+    );
+    if (!res.ok || !res.buf) {
+      setStatus(ui, `Slot ${idx + 1}: plugin returned no state.`);
+      return;
+    }
+    const bytes = new Uint8Array(res.buf);
+    const b64 = bytesToBase64(bytes);
+    await navigator.clipboard.writeText(b64);
+    setStatus(ui, `Slot ${idx + 1}: copied ${bytes.byteLength} bytes of state to clipboard.`);
+  } catch (err) {
+    showError(ui, err);
+  }
+}
+
+async function loadStateFromClipboard(idx: number): Promise<void> {
+  const slot = slots[idx];
+  if (!slot.pluginId) return;
+  let text: string;
+  try {
+    text = await navigator.clipboard.readText();
+  } catch (err) {
+    showError(ui, err);
+    return;
+  }
+  if (!text.trim()) {
+    setStatus(ui, `Slot ${idx + 1}: clipboard is empty.`);
+    return;
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = base64ToBytes(text);
+  } catch {
+    setStatus(ui, `Slot ${idx + 1}: clipboard contents aren't valid base64.`);
+    return;
+  }
+  try {
+    const res = await workletRequest<{ ok: boolean }>('load-state', {
+      slot: idx,
+      buf: bytes.buffer
+    });
+    if (res.ok) {
+      setStatus(ui, `Slot ${idx + 1}: loaded ${bytes.byteLength} bytes of state.`);
+      // Latency may shift after a state load (some plugins recompute it).
+      void refreshLatency(idx);
+    } else {
+      setStatus(ui, `Slot ${idx + 1}: plugin rejected the state.`);
+    }
+  } catch (err) {
+    showError(ui, err);
+  }
+}
+
+async function refreshLatency(idx: number): Promise<void> {
+  const slot = slots[idx];
+  if (!slot.pluginId) return;
+  try {
+    const latency = await workletRequest<number>('get-latency', { slot: idx });
+    slot.latencySamples = typeof latency === 'number' ? latency : null;
+    renderRack();
+  } catch {
+    /* swallow — latency is best-effort */
+  }
+}
+
+// Cycle to the previous/next plugin in this slot's bundle. Re-runs the
+// full load path with a different target id; we don't try to swap plugins
+// inside the worklet because unload-then-load is the only path that has
+// been validated end-to-end.
+async function cycleSlot(idx: number, dir: 1 | -1): Promise<void> {
+  const slot = slots[idx];
+  if (!slot.url || slot.plugins.length < 2) return;
+  const item = SHELF.find((it) => it.url === slot.url);
+  if (!item) return;
+  const len = slot.plugins.length;
+  const newIndex = (slot.pluginIndex + dir + len) % len;
+  // Capture the target id NOW — the worklet-side getInfo() list is the
+  // authoritative source for multi-plugin bundles (external bundles like
+  // signalsmith have no manifest.plugins to fall back on), and unloadSlot
+  // in the upcoming reload will wipe slot.plugins before the reload picks
+  // its target.
+  const targetId = slot.plugins[newIndex]?.id;
+  await loadIntoSlot(idx, item, newIndex, targetId);
+}
+
 // ---------------------------------------------------------------------------
 // Plugin load / unload
 // ---------------------------------------------------------------------------
 
-async function loadIntoSlot(idx: number, item: ShelfItem): Promise<void> {
+async function loadIntoSlot(
+  idx: number,
+  item: ShelfItem,
+  preferPluginIndex = 0,
+  explicitPluginId?: string
+): Promise<void> {
   clearError(ui);
   const name = shelfDisplayName(item);
   setStatus(ui, `Loading ${name} into slot ${idx + 1}…`);
@@ -934,6 +1229,19 @@ async function loadIntoSlot(idx: number, item: ShelfItem): Promise<void> {
     slots[idx].manifest = manifest;
     slots[idx].files = files;
     slots[idx].label = name;
+    slots[idx].pluginPath = (wclapConfig as { pluginPath?: string }).pluginPath ?? null;
+    // Pick the target plugin id, in priority order:
+    //   1. explicit override (used by cycleSlot — authoritative)
+    //   2. nth entry of manifest.plugins for plinken bundles
+    //   3. loader's default (first plugin in the bundle)
+    let targetPluginId = pluginId;
+    if (explicitPluginId) {
+      targetPluginId = explicitPluginId;
+    } else if (preferPluginIndex > 0) {
+      const bundleList = Array.isArray(manifest?.plugins) ? manifest.plugins as BundlePlugin[] : [];
+      const target = bundleList[preferPluginIndex];
+      if (target?.id) targetPluginId = target.id;
+    }
     // WORKAROUND: WebAssembly.Module cannot be transferred over an
     // AudioWorklet MessagePort in Chromium (works for Web Workers but not
     // for the audio thread). Strip the compiled module and let the worklet
@@ -948,7 +1256,7 @@ async function loadIntoSlot(idx: number, item: ShelfItem): Promise<void> {
       pluginPath: (wclapConfig as { pluginPath?: string }).pluginPath
     });
     try {
-      node.port.postMessage({ kind: 'load', slot: idx, wclap: wclapForWorklet, pluginId });
+      node.port.postMessage({ kind: 'load', slot: idx, wclap: wclapForWorklet, pluginId: targetPluginId });
       console.log('[host] postMessage(load) returned without throwing');
     } catch (postErr) {
       console.error('[host] postMessage(load) threw', postErr);
@@ -983,6 +1291,11 @@ async function unloadSlot(idx: number): Promise<void> {
   slot.files = null;
   slot.label = '';
   slot.bypass = false;
+  slot.plugins = [];
+  slot.pluginIndex = 0;
+  slot.webviewUri = null;
+  slot.pluginPath = null;
+  slot.latencySamples = null;
   renderRack();
   refreshPluginSummary();
 }
@@ -995,35 +1308,58 @@ const openPanels = new Map<number, HTMLElement>();
 let panelCascade = 0;
 const proxyResolvers = new Map<number, (p: string) => Promise<ArrayBuffer | null>>();
 
-async function openPluginUi(idx: number): Promise<void> {
+type PanelMode = 'expanded' | 'compact';
+
+async function openPluginUi(idx: number, mode: PanelMode = 'expanded'): Promise<void> {
   await proxyReady;
   const slot = slots[idx];
   if (!slot.pluginId || !slot.files) return;
+  // If a panel for this slot is already open, swap modes if the user asked
+  // for a different one (e.g. clicking 'strip' on an expanded panel);
+  // otherwise just raise the existing panel to the front.
   if (openPanels.has(idx)) {
-    bringPanelToFront(openPanels.get(idx)!);
+    const existing = openPanels.get(idx)!;
+    if (existing.dataset.panelMode === mode) {
+      bringPanelToFront(existing);
+      return;
+    }
+    closePluginUi(idx);
+  }
+  // The plugin's clap.webview/3.get_uri tells us exactly which file to
+  // load — already fetched by the worklet inside pluginGetInfo and parked
+  // on `slot.webviewUri`. The URI looks like `file:/plugin/<hash>/ui/...`;
+  // strip the `file:` prefix and prepend the proxy SW prefix to form the
+  // iframe src. Null URI means the plugin has no UI extension at all
+  // (e.g. the chorus / compressor plugins in signalsmith-clap-cpp).
+  if (!slot.webviewUri) {
+    setStatus(ui, `Slot ${idx + 1}: this plugin has no UI.`);
     return;
   }
-  if (slot.manifest && slot.manifest.has_ui === false) {
-    setStatus(ui, `Slot ${idx + 1}: plugin has no UI.`);
-    return;
-  }
-
-  // Locate the entry HTML inside the bundle. The path is /plugin/<hash>/ui/...
+  // Strip `file:` and any URL-authority slashes that follow. Plinken
+  // plugins emit `file:/plugin/<hash>/...` (one slash), signalsmith emits
+  // `file:///plugin/<hash>/...` (URI standard form with authority slash).
+  // Normalise to a single leading slash so the proxy SW path matches the
+  // file map keys.
+  const uiKey = slot.webviewUri.replace(/^file:\/*/, '/');
   const files = slot.files;
-  const fileKeys = Object.keys(files);
-  const uiKey = fileKeys.find((k) => /\/ui\/[^/]+\.html$/i.test(k));
-  if (!uiKey) {
-    setStatus(ui, `Slot ${idx + 1}: no UI entry found in bundle.`);
-    return;
-  }
+  const pluginPath = slot.pluginPath ?? '';
 
-  // Wire a resolver that serves every file in this bundle to the proxy SW.
-  // The bundle keys are the "mutated" path from wclap-host-js, but iframe
-  // requests reference the same prefix because we set iframe src from a
-  // bundle key. So no remapping needed in V2.
+  // Resolver tries the request path against the bundle's file map under
+  // several forms. wclap-host-js mutates plugin paths (adding a `-copy-<hex>`
+  // suffix on second instantiation), and some upstream plugins return a
+  // get_uri relative to their pluginPath rather than absolute. So we fall
+  // back to: prefixed, trimmed-leading-slash-prefixed, and re-mapping the
+  // mutated prefix back to the original.
   proxyResolvers.set(idx, async (path: string) => {
-    const buf = files[path];
-    return buf ?? null;
+    if (files[path]) return files[path];
+    if (pluginPath) {
+      const prefixed = pluginPath + (path.startsWith('/') ? path : '/' + path);
+      if (files[prefixed]) return files[prefixed];
+    }
+    // Some bundles (`-copy-<hex>` suffix) — try stripping it from the path.
+    const stripped = path.replace(/^(\/plugin\/[^/]+?)-copy-[0-9a-f]+\//i, '$1/');
+    if (files[stripped]) return files[stripped];
+    return null;
   });
 
   const iframe = document.createElement('iframe');
@@ -1033,7 +1369,7 @@ async function openPluginUi(idx: number): Promise<void> {
   slot.iframe = iframe;
   iframeBridge?.register(idx, iframe);
 
-  const panel = buildPluginPanel(idx, slot.label, iframe);
+  const panel = buildPluginPanel(idx, slot.label, iframe, mode, slot.manifest);
   document.getElementById('pluginPanels')?.appendChild(panel);
   slot.panel = panel;
   openPanels.set(idx, panel);
@@ -1044,11 +1380,14 @@ async function openPluginUi(idx: number): Promise<void> {
 function buildPluginPanel(
   idx: number,
   label: string,
-  iframe: HTMLIFrameElement
+  iframe: HTMLIFrameElement,
+  mode: PanelMode = 'expanded',
+  manifest?: WclapManifest | null
 ): HTMLElement {
   const panel = document.createElement('div');
-  panel.className = 'pluginPanel';
+  panel.className = `pluginPanel pluginPanel--${mode}`;
   panel.dataset.slotIndex = String(idx);
+  panel.dataset.panelMode = mode;
 
   const head = document.createElement('div');
   head.className = 'pluginPanelHead';
@@ -1071,6 +1410,25 @@ function buildPluginPanel(
   body.className = 'pluginPanelBody';
   body.appendChild(iframe);
   panel.appendChild(body);
+
+  // Apply manifest-declared size to the panel itself (not the iframe — the
+  // iframe is `width:100%; height:100%` of the body, and the panel's
+  // default `width: clamp(20rem, ...)` would otherwise floor any compact
+  // bundle at ~320×288). The plugin's UI uses viewport size to switch
+  // between compact and expanded layout, so this controls layout inside
+  // too. We approximate the head's height (~36px incl. border) so the
+  // iframe body ends up close to the manifest's declared dimensions.
+  const size =
+    mode === 'compact'
+      ? manifest?.ui?.compact_size
+      : manifest?.ui?.expanded_size;
+  if (size) {
+    const HEAD_PX = 36;
+    panel.style.width = `${size.width}px`;
+    panel.style.height = `${size.height + HEAD_PX}px`;
+    panel.style.minWidth = '0';
+    panel.style.minHeight = '0';
+  }
 
   return panel;
 }
@@ -1195,6 +1553,7 @@ function closePluginUi(idx: number): void {
   if (panel) panel.remove();
   openPanels.delete(idx);
   proxyResolvers.delete(idx);
+  iframeBridge?.unregister(idx);
   if (slot) {
     slot.iframe = null;
     slot.panel = null;
@@ -1285,6 +1644,7 @@ async function respondProxy(
 ): Promise<void> {
   const body = await lookupProxyFile(path);
   const mime = body ? mimeForPath(path) : undefined;
+  console.log('[host] proxy', path, '→', body ? `${body.byteLength}b ${mime}` : 'NOT FOUND');
   source.postMessage({ type: 'plugin-proxy-response', id, body, mime });
 }
 
@@ -1340,4 +1700,194 @@ function rms(analyser: AnalyserNode): number {
   }
   return Math.sqrt(sum / len);
 }
+
+// ---------------------------------------------------------------------------
+// Web MIDI → CLAP events
+// ---------------------------------------------------------------------------
+//
+// V2 routing differs from V1: instead of one AudioWorkletNode per plugin
+// each exposing an `acceptEvent` remote method, V2 has a single chain
+// worklet. We encode events on main and ship them with the new
+// `midi-event` worklet message; the worklet pushes them into the target
+// slot's `pendingInputEvents` queue, which is drained at the start of
+// each block via `hostApi.pluginAcceptEvent`. Plugin output_events
+// flow forward to the next non-bypassed slot via the `eventsOutTryPush`
+// host callback (also implemented inside the worklet).
+
+const CLAP_EVENT_NOTE_ON = 0;
+const CLAP_EVENT_NOTE_OFF = 1;
+const CLAP_EVENT_MIDI = 10;
+const CLAP_CORE_EVENT_SPACE_ID = 0;
+
+// clap_event_note: header(16) + note_id(4) + port_index(2) + channel(2) +
+// key(2) + pad(6, double 8-align) + velocity(8) = 40 bytes.
+const CLAP_EVENT_NOTE_SIZE = 40;
+// clap_event_midi: header(16) + port_index(2) + data[3] + pad(3) = 24.
+const CLAP_EVENT_MIDI_SIZE = 24;
+
+function encodeClapNoteEvent(
+  isOn: boolean,
+  channel: number,
+  key: number,
+  velocity: number
+): ArrayBuffer {
+  const buf = new ArrayBuffer(CLAP_EVENT_NOTE_SIZE);
+  const dv = new DataView(buf);
+  dv.setUint32(0, CLAP_EVENT_NOTE_SIZE, true); // size
+  dv.setUint32(4, 0, true); // time = block start
+  dv.setUint16(8, CLAP_CORE_EVENT_SPACE_ID, true);
+  dv.setUint16(10, isOn ? CLAP_EVENT_NOTE_ON : CLAP_EVENT_NOTE_OFF, true);
+  dv.setUint32(12, 1, true); // flags = CLAP_EVENT_IS_LIVE
+  dv.setInt32(16, -1, true); // note_id (-1 = unspecified)
+  dv.setInt16(20, 0, true); // port_index
+  dv.setInt16(22, channel, true);
+  dv.setInt16(24, key, true);
+  // bytes 26..32 alignment pad for the f64
+  dv.setFloat64(32, velocity, true); // velocity 0.0..1.0
+  return buf;
+}
+
+function encodeClapMidiEvent(midiBytes: Uint8Array): ArrayBuffer {
+  // Pass-through wrapper for any 1–3-byte channel-voice message (CC,
+  // pitch bend, aftertouch, program change). Plugins consuming MIDI
+  // dispatch on header.type = CLAP_EVENT_MIDI.
+  const buf = new ArrayBuffer(CLAP_EVENT_MIDI_SIZE);
+  const dv = new DataView(buf);
+  dv.setUint32(0, CLAP_EVENT_MIDI_SIZE, true);
+  dv.setUint32(4, 0, true);
+  dv.setUint16(8, CLAP_CORE_EVENT_SPACE_ID, true);
+  dv.setUint16(10, CLAP_EVENT_MIDI, true);
+  dv.setUint32(12, 1, true); // flags = CLAP_EVENT_IS_LIVE
+  dv.setUint16(16, 0, true); // port_index
+  dv.setUint8(18, midiBytes[0] ?? 0);
+  dv.setUint8(19, midiBytes[1] ?? 0);
+  dv.setUint8(20, midiBytes[2] ?? 0);
+  return buf;
+}
+
+// Send an event to the chain worklet for fan-out. `slot: null` (default)
+// posts the event to every loaded slot — that's V1's behaviour and what
+// the user expects for hardware MIDI. The worklet then forwards output
+// events between slots so a keyboard plugin in slot 0 drives a synth
+// plugin in slot 1 automatically.
+function postEventToChain(buf: ArrayBuffer, slot: number | null = null): void {
+  if (!chainNode) return;
+  chainNode.port.postMessage(
+    { kind: 'midi-event', slot, buf },
+    [buf]
+  );
+}
+
+function panicAllNotesOff(): void {
+  // Send a NOTE_OFF for every key on channel 0 — covers stuck notes from
+  // any plugin that consumed our input. Then clear the held-state UI.
+  for (let key = 0; key < 128; key++) {
+    postEventToChain(encodeClapNoteEvent(false, 0, key, 0));
+  }
+  heldNotes.clear();
+  refreshMidiNotesUi();
+  flashMidiLed(ui);
+}
+
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+function midiNoteName(key: number): string {
+  const name = NOTE_NAMES[key % 12] ?? '?';
+  const octave = Math.floor(key / 12) - 1;
+  return `${name}${octave}`;
+}
+
+// Held notes (currently down) keyed by `${channel}:${key}`. Display shows
+// only what's actually held — the "chord log" from V1.
+const heldNotes = new Map<string, { key: number; vel: number }>();
+
+function refreshMidiNotesUi(): void {
+  const held = [...heldNotes.values()]
+    .map((n) => `${midiNoteName(n.key)}·${Math.round(n.vel * 127)}`)
+    .join(' ');
+  setMidiNotes(ui, held);
+}
+
+function refreshMidiInputsLabel(access: MIDIAccess): void {
+  const names = [...access.inputs.values()].map((i) => i.name ?? 'input');
+  setMidiStatus(ui, names.length ? names.join(', ') : 'no device');
+}
+
+let midiAccess: MIDIAccess | null = null;
+
+function rescanMidi(): void {
+  if (!midiAccess) {
+    void setupWebMidi();
+    return;
+  }
+  for (const input of midiAccess.inputs.values()) wireMidiInput(input);
+  refreshMidiInputsLabel(midiAccess);
+  flashMidiLed(ui);
+  setStatus(ui, `MIDI rescanned: ${midiAccess.inputs.size} input(s).`);
+}
+
+function wireMidiInput(input: MIDIInput): void {
+  input.onmidimessage = (ev) => {
+    flashMidiLed(ui);
+    const data = ev.data;
+    if (!data || data.length < 1) return;
+    const status = data[0] ?? 0;
+    const high = status & 0xf0;
+    const channel = status & 0x0f;
+    const key = data[1] ?? 0;
+    const velRaw = data[2] ?? 0;
+    // Make sure the chain worklet exists; we need a route for the event.
+    // Don't block — if the worklet isn't built yet, drop the event.
+    if (!chainNode) return;
+    if (high === 0x90 && velRaw > 0) {
+      const velocity = velRaw / 127;
+      heldNotes.set(`${channel}:${key}`, { key, vel: velocity });
+      refreshMidiNotesUi();
+      postEventToChain(encodeClapNoteEvent(true, channel, key, velocity));
+    } else if (high === 0x80 || (high === 0x90 && velRaw === 0)) {
+      if (heldNotes.delete(`${channel}:${key}`)) refreshMidiNotesUi();
+      postEventToChain(encodeClapNoteEvent(false, channel, key, velRaw / 127));
+    } else if (
+      high === 0xb0 || // CC
+      high === 0xe0 || // pitch bend
+      high === 0xd0 || // channel aftertouch
+      high === 0xa0 || // poly aftertouch
+      high === 0xc0    // program change
+    ) {
+      postEventToChain(encodeClapMidiEvent(data));
+    }
+  };
+}
+
+async function setupWebMidi(): Promise<void> {
+  if (typeof navigator === 'undefined' || !navigator.requestMIDIAccess) {
+    setMidiStatus(ui, 'Web MIDI unsupported');
+    return;
+  }
+  let access: MIDIAccess;
+  try {
+    access = await navigator.requestMIDIAccess({ sysex: false });
+  } catch (err) {
+    console.warn('[wclap-host] MIDI access denied', err);
+    setMidiStatus(ui, 'permission denied');
+    return;
+  }
+  midiAccess = access;
+  for (const input of access.inputs.values()) wireMidiInput(input);
+  refreshMidiInputsLabel(access);
+  access.onstatechange = (ev) => {
+    const port = (ev as MIDIConnectionEvent).port;
+    if (port instanceof MIDIInput && port.state === 'connected') {
+      wireMidiInput(port);
+    }
+    refreshMidiInputsLabel(access);
+  };
+  const count = access.inputs.size;
+  if (count > 0) {
+    console.log(`[wclap-host] Web MIDI: ${count} input(s) listening`);
+  }
+}
+
+ui.midiPanic.addEventListener('click', panicAllNotesOff);
+ui.midiRescan.addEventListener('click', rescanMidi);
+void setupWebMidi();
 

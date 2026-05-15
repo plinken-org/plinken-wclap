@@ -102,6 +102,15 @@ pub mod host_webview {
     pub const SIZE: usize = 4;
 }
 
+pub const EXT_LATENCY: &[u8] = b"clap.latency\0";
+
+pub mod latency {
+    //! `wclap_plugin_latency` — single function pointer. Plugins return the
+    //! number of samples they delay output relative to input.
+    pub const GET: usize = 0; // Function<u32, plugin*>
+    pub const SIZE: usize = 4;
+}
+
 pub const EXT_PARAMS: &[u8] = b"clap.params\0";
 
 pub mod params {

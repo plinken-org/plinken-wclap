@@ -52,11 +52,6 @@ class ChainProcessor extends AudioWorkletProcessor {
       });
     };
     this.port.onmessage = (e) => {
-      // Echo every incoming message so the main side can confirm delivery.
-      this.port.postMessage({
-        kind: 'dbg',
-        msg: '[chain] onmessage received kind=' + (e?.data?.kind ?? typeof e?.data)
-      });
       if (e?.data?.kind === 'ping') {
         this.port.postMessage({ kind: 'pong', from: 'worklet' });
         return;
@@ -99,8 +94,18 @@ class ChainProcessor extends AudioWorkletProcessor {
           [bytes.buffer]
         );
       },
-      eventsOutTryPush: (_pluginPtr, _ptr, _length) => {
-        // Not used in the vocal chain; events are not routed between plugins.
+      eventsOutTryPush: (pluginPtr, ptr, length) => {
+        // Plugin emitted an event (note on/off, MIDI CC, etc). Forward it
+        // to the NEXT non-bypassed slot in the chain so MIDI flows downstream.
+        const slot = this.lookupSlotByPlugin(pluginPtr);
+        if (!slot) return;
+        const bytes = new Uint8Array(slot.memory.buffer, ptr, length).slice();
+        for (let j = slot.index + 1; j < NUM_SLOTS; j++) {
+          const next = this.slots[j];
+          if (!next || next.bypass) continue;
+          next.pendingInputEvents.push(bytes);
+          break;
+        }
       },
       stateMarkDirty: (pluginPtr) => {
         const slot = this.lookupSlotByPlugin(pluginPtr);
@@ -138,7 +143,6 @@ class ChainProcessor extends AudioWorkletProcessor {
 
   async onMessage(data) {
     if (!data || typeof data !== 'object') return;
-    this.dbg('[chain] onMessage routing', { kind: data.kind, slot: data.slot });
     try {
       switch (data.kind) {
         case 'load':
@@ -156,8 +160,20 @@ class ChainProcessor extends AudioWorkletProcessor {
         case 'plugin-msg':
           this.handlePluginMessage(data);
           break;
+        case 'midi-event':
+          this.handleMidiEvent(data);
+          break;
         case 'get-params':
           await this.handleGetParams(data);
+          break;
+        case 'save-state':
+          this.handleSaveState(data);
+          break;
+        case 'load-state':
+          this.handleLoadState(data);
+          break;
+        case 'get-latency':
+          this.handleGetLatency(data);
           break;
         default:
           console.warn('[chain] unknown message kind:', data.kind);
@@ -198,11 +214,16 @@ class ChainProcessor extends AudioWorkletProcessor {
     const hostedPtr = this.hostApi.makeHosted(wclapInstance.ptr);
     if (!hostedPtr) throw new Error('makeHosted failed');
 
-    // Pick the right plugin from the bundle.
+    // Enumerate every plugin in the bundle so the host can show a cycle
+    // widget when the bundle has more than one. We always call getInfo()
+    // (not just on the "no override" path) so the host sees the full list
+    // regardless of how the load was triggered.
+    const bundleInfo = this.decodeCbor(this.hostApi.getInfo(hostedPtr, this.hostedBytes));
+    const bundlePlugins = Array.isArray(bundleInfo?.plugins) ? bundleInfo.plugins : [];
+
     let resolvedId = pluginId;
     if (!resolvedId) {
-      const info = this.decodeCbor(this.hostApi.getInfo(hostedPtr, this.hostedBytes));
-      resolvedId = info.plugins[0]?.id;
+      resolvedId = bundlePlugins[0]?.id;
       if (!resolvedId) throw new Error('bundle has no plugins');
     }
     this.dbg('[chain] resolved plugin id =', resolvedId);
@@ -239,7 +260,9 @@ class ChainProcessor extends AudioWorkletProcessor {
       memory: wclapInstance.memory,
       audioPointers,
       bypass: false,
-      info: pluginInfo
+      info: pluginInfo,
+      /** CLAP event byte arrays waiting to be pushed to the plugin next block. */
+      pendingInputEvents: []
     };
     this.slots[slot] = slotState;
     this.pluginToSlot.set(pluginPtr, slot);
@@ -252,7 +275,8 @@ class ChainProcessor extends AudioWorkletProcessor {
       kind: 'loaded',
       slot,
       pluginId: resolvedId,
-      info: pluginInfo
+      info: pluginInfo,
+      bundlePlugins
     });
   }
 
@@ -299,6 +323,29 @@ class ChainProcessor extends AudioWorkletProcessor {
     this.hostApi.pluginMessage(s.pluginPtr, this.hostedBytes);
   }
 
+  /**
+   * Queue a CLAP-encoded event for one slot (`slot >= 0`) or fan out to
+   * every loaded slot (`slot === null` / undefined). Events are drained
+   * at the start of the slot's next `process()` call via
+   * `hostApi.pluginAcceptEvent`. Buffers are copied per-slot so each
+   * plugin sees its own Uint8Array (we mutate hostedBytes when pushing,
+   * so sharing one Uint8Array reference is fine — pluginAcceptEvent
+   * copies into wasm memory immediately).
+   */
+  handleMidiEvent({ slot, buf }) {
+    if (!buf) return;
+    const bytes = new Uint8Array(buf);
+    if (slot == null) {
+      for (let i = 0; i < NUM_SLOTS; i++) {
+        const s = this.slots[i];
+        if (s) s.pendingInputEvents.push(bytes);
+      }
+    } else {
+      const s = this.slots[slot];
+      if (s) s.pendingInputEvents.push(bytes);
+    }
+  }
+
   async handleGetParams({ slot, requestId }) {
     const s = this.slots[slot];
     if (!s) {
@@ -314,6 +361,54 @@ class ChainProcessor extends AudioWorkletProcessor {
       );
     }
     this.port.postMessage({ kind: 'params', slot, requestId, params });
+  }
+
+  /**
+   * Save plugin state via clap.state.save. Bytes are returned as a fresh
+   * ArrayBuffer over the port — the host base64-encodes for clipboard.
+   */
+  handleSaveState({ slot, requestId }) {
+    const s = this.slots[slot];
+    if (!s) {
+      this.port.postMessage({ kind: 'state-saved', slot, requestId, ok: false, buf: null });
+      return;
+    }
+    const ok = this.hostApi.pluginSaveState(s.pluginPtr, this.hostedBytes) !== 0;
+    if (!ok) {
+      this.port.postMessage({ kind: 'state-saved', slot, requestId, ok: false, buf: null });
+      return;
+    }
+    const ptr = this.hostApi.getBytesData(this.hostedBytes);
+    const len = this.hostApi.getBytesLength(this.hostedBytes);
+    const bytes = new Uint8Array(this.host.hostMemory.buffer).slice(ptr, ptr + len);
+    this.port.postMessage(
+      { kind: 'state-saved', slot, requestId, ok: true, buf: bytes.buffer },
+      [bytes.buffer]
+    );
+  }
+
+  /** Load plugin state via clap.state.load. */
+  handleLoadState({ slot, requestId, buf }) {
+    const s = this.slots[slot];
+    if (!s) {
+      this.port.postMessage({ kind: 'state-loaded', slot, requestId, ok: false });
+      return;
+    }
+    this.writeHostBytes(new Uint8Array(buf));
+    const ok = this.hostApi.pluginLoadState(s.pluginPtr, this.hostedBytes) !== 0;
+    this.port.postMessage({ kind: 'state-loaded', slot, requestId, ok });
+  }
+
+  /**
+   * Query the plugin's reported latency via clap.latency.get. Requires the
+   * host wasm to export pluginLatency (added in step "latency display").
+   */
+  handleGetLatency({ slot, requestId }) {
+    const s = this.slots[slot];
+    const latency = (s && typeof this.hostApi.pluginLatency === 'function')
+      ? this.hostApi.pluginLatency(s.pluginPtr) >>> 0
+      : 0;
+    this.port.postMessage({ kind: 'latency', slot, requestId, latency });
   }
 
   decodeCbor() {
@@ -381,6 +476,16 @@ class ChainProcessor extends AudioWorkletProcessor {
           const dst = new Float32Array(s.memory.buffer, inputs0[c], blockLength);
           dst.set(current[c % current.length]);
         }
+      }
+
+      // Drain queued input events (Web MIDI fanout + previous slot's
+      // output events) into the plugin before processing audio.
+      if (s.pendingInputEvents.length) {
+        for (const evtBytes of s.pendingInputEvents) {
+          this.writeHostBytes(evtBytes);
+          this.hostApi.pluginAcceptEvent(s.pluginPtr, this.hostedBytes);
+        }
+        s.pendingInputEvents.length = 0;
       }
 
       let status;

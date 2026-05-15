@@ -36,8 +36,8 @@
         <div class="sectionHead">
           <h2 class="sectionTitle">Source</h2>
           <p class="sectionSub">
-            Pick a 440&nbsp;Hz test tone or your microphone, then press Start.
-            Signal flows down through the FX chain below.
+            Test Tone: 440&nbsp;Hz &minus;10&nbsp;dB &nbsp; &middot; &nbsp;
+            Mic: Watch out for feedback
           </p>
         </div>
         <div class="sourceRow">
@@ -89,6 +89,29 @@
             slot. Slots run top → bottom. Empty slots pass through. All
             plugins run inside one worklet for minimum latency.
           </p>
+        </div>
+
+        <div id="midiBar" class="midiBar" aria-live="polite">
+          <span class="midiBarLabel">MIDI in</span>
+          <span id="midiLed" class="midiLed" aria-hidden="true"></span>
+          <span id="midiStatus" class="midiStatus">no device</span>
+          <button
+            id="midiRescan"
+            type="button"
+            class="midiPanic"
+            title="Re-enumerate connected MIDI inputs"
+          >
+            rescan
+          </button>
+          <button
+            id="midiPanic"
+            type="button"
+            class="midiPanic"
+            title="Send Note Off to every key (panic)"
+          >
+            all notes off
+          </button>
+          <span id="midiNotes" class="midiNotes"></span>
         </div>
 
         <div id="rack" class="rack"></div>
@@ -166,15 +189,6 @@
 
         <pre id="errorBox" class="error" hidden></pre>
       </section>
-
-      <!-- Hidden (no MIDI yet) but required by ui.ts type contract. -->
-      <div id="midiBar" hidden>
-        <span id="midiLed"></span>
-        <span id="midiStatus"></span>
-        <span id="midiNotes"></span>
-        <button id="midiPanic" type="button"></button>
-        <button id="midiRescan" type="button"></button>
-      </div>
 
       <footer class="footer">
         <a href="https://plinken.org">plinken.org</a>

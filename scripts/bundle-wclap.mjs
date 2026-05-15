@@ -121,6 +121,12 @@ async function main() {
   // (vendor/wclap-host-js/es6/wclap-plugin.mjs) expects this exact name.
   entries.push({ path: 'module.wasm', content: await readFile(wasmPath) });
 
+  // plugin.json is shipped alongside so the host can read manifest metadata
+  // (has_ui, ui.compact_size / expanded_size, etc.) at runtime. Without
+  // this, the host-side `parseManifest` returns null and any UI affordance
+  // gated on manifest fields (strip view, latency hints, ...) stays off.
+  entries.push({ path: 'plugin.json', content: await readFile(join(root, 'plugin.json')) });
+
   // ui/ is optional. Walk it and add each file, preserving relative paths.
   const uiDir = join(root, 'ui');
   if (existsSync(uiDir)) {
