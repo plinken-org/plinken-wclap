@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Spectrum</title>
+<link rel="stylesheet" href="../widgets/widgets.css">
+<style>
+  .root {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    align-items: center;
+  }
+  .root.compact {
+    grid-template-columns: max-content 1fr;
+    gap: 8px;
+    padding: 0 10px;
+    --canvas-h: 44px;
+  }
+  .root.compact .title { font-size: 0.65rem; }
+  .root.compact .controls { display: none; }
+
+  .root.expanded {
+    grid-template-rows: auto 1fr;
+    padding: 14px 18px;
+    gap: 10px;
+    --canvas-h: 180px;
+  }
+  .root.expanded .title { text-align: center; font-size: 0.78rem; }
+
+  .body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+  }
+  .root.compact .body { flex-direction: row; align-items: center; gap: 6px; }
+
+  .canvas-wrap {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: var(--canvas-h);
+    background: var(--bg-deep);
+    border: 1px solid var(--border-soft);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .controls {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    flex: 0 0 auto;
+    --fader-h: 110px;
+    --fader-thumb: 18px;
+  }
+</style>
+</head>
+<body>
+<div class="root expanded" id="root">
+  <div class="title">Spectrum</div>
+  <div class="body">
+    <div class="canvas-wrap"><canvas id="spec"></canvas></div>
+    <div class="controls">
+      <div id="ctrl-floor"></div>
+      <div id="ctrl-smooth"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { Fader } from '../widgets/fader.mjs';
+  import { Transport } from '../widgets/transport.mjs';
+
+  // Param IDs — must match plugins/com.plinken/spectrum/src/lib.rs
+  const PID_FLOOR = 0x0001;
+  const PID_SMOOTH = 0x0002;
+  const PID_SAMPLE_RATE = 0x1000;
+
+  // Must match `F_MIN` and `N_BINS` in the Rust side so log-frequency
+  // label positions land on the right bars.
+  const F_MIN = 20;
+  const N_BINS = 64;
+
+  const transport = new Transport();
+
+  const floor = new Fader(
+    document.getElementById('ctrl-floor'),
+    { id: PID_FLOOR, min: -120, max: -20, default: -80, unit: 'dB', label: 'Floor' }
+  );
+  const smooth = new Fader(
+    document.getElementById('ctrl-smooth'),
+    { id: PID_SMOOTH, min: 0, max: 0.95, default: 0.55, unit: '', label: 'Smooth' }
+  );
+  for (const ctrl of [floor, smooth]) {
+    ctrl.onChange((v, id) => transport.sendSet(id, v));
+  }
+
+  // --- canvas spectrum ---------------------------------------------------
+  const canvas = document.getElementById('spec');
+  const ctx = canvas.getContext('2d');
+  let dpr = window.devicePixelRatio || 1;
+
+  let bands = null;          // raw Float32Array (dB) most recently received
+  let smoothed = null;       // per-band smoothed dB (peak-hold release)
+  let needsDraw = false;
+  let rafQueued = false;
+  let nyquist = 24000;       // updated once via PID_SAMPLE_RATE
+  let barGradient = null;
+  let barGradientKey = '';   // invalidate when canvas height or floor change
+
+  function sizeCanvas() {
+    dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    canvas.width = Math.max(1, Math.floor(w * dpr));
+    canvas.height = Math.max(1, Math.floor(h * dpr));
+  }
+
+  function ensureSmoothed(n) {
+    if (!smoothed || smoothed.length !== n) {
+      smoothed = new Float32Array(n);
+      smoothed.fill(floor.value ?? -80);
+    }
+  }
+
+  function ensureGradient(plotH, plotTop, minDb, maxDb) {
+    const key = `${plotTop}:${plotH}:${minDb}:${maxDb}`;
+    if (barGradient && barGradientKey === key) return barGradient;
+    barGradientKey = key;
+    // Build a vertical gradient with stops anchored to dB *values*: each
+    // band's height naturally maps to its dB, so the band's top pixel
+    // lands on the gradient stop matching its level.
+    const g = ctx.createLinearGradient(0, plotTop + plotH, 0, plotTop);
+    const range = Math.max(1, maxDb - minDb);
+    const stop = (db, color) => {
+      const t = Math.max(0, Math.min(1, (db - minDb) / range));
+      g.addColorStop(t, color);
+    };
+    stop(minDb, '#3a4596');       // deep periwinkle — quiet floor
+    stop(-48,   '#5a68b8');
+    stop(-30,   '#8691da');       // periwinkle
+    stop(-18,   '#925db3');       // accent purple
+    stop(-9,    '#c79b3a');       // hot amber
+    stop(-3,    '#c4566d');       // clip
+    stop(maxDb, '#e07a8a');
+    barGradient = g;
+    return g;
+  }
+
+  // Compute the bar index (0..N_BINS) for a frequency under the same
+  // log-spacing the Rust side uses. Out-of-range freqs return a value
+  // outside [0, N_BINS] so the caller can skip them.
+  function freqToBarIndex(f) {
+    const ratio = Math.log(nyquist / F_MIN);
+    if (!isFinite(ratio) || ratio <= 0) return -1;
+    return (Math.log(f / F_MIN) / ratio) * N_BINS;
+  }
+
+  function formatHz(f) {
+    if (f >= 1000) return (f / 1000).toFixed(f >= 10000 ? 0 : 1).replace(/\.0$/, '') + 'k';
+    return String(f);
+  }
+
+  const FREQ_TICKS = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
+  const DB_TICKS = [0, -12, -24, -36, -48, -60, -72, -84, -96, -108];
+
+  function draw() {
+    rafQueued = false;
+    if (!needsDraw || !bands) return;
+    needsDraw = false;
+
+    const w = canvas.width;
+    const h = canvas.height;
+    const n = bands.length;
+    const minDb = floor.value ?? -80;
+    const maxDb = 0;
+    const range = Math.max(1, maxDb - minDb);
+    const alpha = Math.max(0, Math.min(0.95, smooth.value ?? 0.55));
+
+    const compact = document.getElementById('root').classList.contains('compact');
+    const showAxes = !compact;
+    const fontPx = Math.round(10 * dpr);
+    const padTop = Math.round(4 * dpr);
+    const padLeft = Math.round(4 * dpr);
+    const axisRight = showAxes ? Math.round(26 * dpr) : Math.round(4 * dpr);
+    const axisBottom = showAxes ? Math.round(14 * dpr) : Math.round(2 * dpr);
+    const plotX = padLeft;
+    const plotY = padTop;
+    const plotW = Math.max(1, w - padLeft - axisRight);
+    const plotH = Math.max(1, h - padTop - axisBottom);
+
+    ensureSmoothed(n);
+    for (let i = 0; i < n; i++) {
+      const x = bands[i];
+      if (x > smoothed[i]) {
+        smoothed[i] = x;
+      } else {
+        smoothed[i] = smoothed[i] * alpha + x * (1 - alpha);
+      }
+    }
+
+    ctx.fillStyle = '#0d0d0d';
+    ctx.fillRect(0, 0, w, h);
+
+    // Horizontal dB grid + labels.
+    ctx.strokeStyle = '#2a2a2a';
+    ctx.lineWidth = 1;
+    if (showAxes) {
+      ctx.fillStyle = '#5a5a5a';
+      ctx.font = `${fontPx}px ui-monospace, monospace`;
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+    }
+    for (const db of DB_TICKS) {
+      if (db <= minDb || db > maxDb) continue;
+      const y = Math.round(plotY + (1 - (db - minDb) / range) * plotH) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(plotX, y);
+      ctx.lineTo(plotX + plotW, y);
+      ctx.stroke();
+      if (showAxes) {
+        ctx.fillText(`${db}`, plotX + plotW + Math.round(4 * dpr), y);
+      }
+    }
+
+    // Bars — single vertical gradient applied uniformly; each bar's height
+    // determines how much of the gradient is visible.
+    const grad = ensureGradient(plotH, plotY, minDb, maxDb);
+    ctx.fillStyle = grad;
+    const bw = plotW / n;
+    for (let i = 0; i < n; i++) {
+      const db = smoothed[i];
+      const norm = Math.max(0, Math.min(1, (db - minDb) / range));
+      const bh = norm * plotH;
+      const x = plotX + Math.floor(i * bw);
+      const x1 = plotX + Math.floor((i + 1) * bw);
+      ctx.fillRect(x, plotY + plotH - bh, Math.max(1, x1 - x - 1), bh);
+    }
+
+    // Frequency labels + tick marks along the bottom (log spacing).
+    if (showAxes) {
+      ctx.fillStyle = '#5a5a5a';
+      ctx.strokeStyle = '#373737';
+      ctx.textBaseline = 'top';
+      ctx.textAlign = 'center';
+      const labelY = plotY + plotH + Math.round(3 * dpr);
+      for (const f of FREQ_TICKS) {
+        if (f < F_MIN || f > nyquist) continue;
+        const bIdx = freqToBarIndex(f);
+        if (bIdx < 0 || bIdx > N_BINS) continue;
+        const x = plotX + (bIdx / N_BINS) * plotW;
+        ctx.beginPath();
+        ctx.moveTo(Math.round(x) + 0.5, plotY + plotH);
+        ctx.lineTo(Math.round(x) + 0.5, plotY + plotH + Math.round(2 * dpr));
+        ctx.stroke();
+        ctx.fillText(formatHz(f), x, labelY);
+      }
+    }
+  }
+
+  function scheduleDraw() {
+    if (rafQueued) return;
+    rafQueued = true;
+    requestAnimationFrame(draw);
+  }
+
+  transport.onSpectrum((arr) => {
+    bands = arr;
+    needsDraw = true;
+    scheduleDraw();
+  });
+
+  // Floor/smooth params come back via the params snapshot channel. The
+  // plugin also pushes the active sample rate on its first frame so the
+  // frequency labels land on the bars that match those frequencies.
+  transport.onSnapshot((params) => {
+    const f = params.get(PID_FLOOR);
+    if (f != null) {
+      floor.setValueFromHost(f);
+      barGradient = null;
+    }
+    const s = params.get(PID_SMOOTH);
+    if (s != null) smooth.setValueFromHost(s);
+    const sr = params.get(PID_SAMPLE_RATE);
+    if (sr != null) nyquist = sr * 0.5;
+    needsDraw = true;
+    scheduleDraw();
+  });
+
+  floor.onChange(() => { barGradient = null; });
+
+  transport.sendReady();
+
+  // --- responsive ---------------------------------------------------------
+  function applyLayout() {
+    const root = document.getElementById('root');
+    const compact = window.innerWidth < 320 || window.innerHeight < 90;
+    root.classList.toggle('compact', compact);
+    root.classList.toggle('expanded', !compact);
+    sizeCanvas();
+    barGradient = null;
+    needsDraw = true;
+    scheduleDraw();
+  }
+  applyLayout();
+  window.addEventListener('resize', applyLayout);
+
+  // Decay smoothed values toward floor when no audio is arriving so the
+  // canvas eventually falls to the bottom on silence.
+  setInterval(() => {
+    if (!smoothed) return;
+    const minDb = floor.value ?? -80;
+    let changed = false;
+    for (let i = 0; i < smoothed.length; i++) {
+      if (smoothed[i] > minDb) {
+        smoothed[i] = Math.max(minDb, smoothed[i] - 1.5);
+        changed = true;
+      }
+    }
+    if (changed) {
+      needsDraw = true;
+      scheduleDraw();
+    }
+  }, 50);
+</script>
+</body>
+</html>

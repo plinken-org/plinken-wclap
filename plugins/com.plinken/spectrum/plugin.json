@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "id": "com.plinken.spectrum",
+  "name": "Spectrum",
+  "vendor": "Plinken",
+  "version": "0.0.1",
+  "description": "Real-time spectrum analyzer. Audio passes through unchanged; an FFT side-tap pushes 64 log-spaced magnitude bands to the UI at ~30 Hz.",
+  "features": ["audio-effect", "analyzer", "utility"],
+  "license": "MIT",
+  "homepage": "https://plinken.org",
+  "source": "src/",
+  "artifact": "dist/spectrum.wclap.tar.gz",
+  "format": "tar.gz",
+  "has_ui": true,
+  "ui": {
+    "compact_size":  { "width": 360, "height": 56 },
+    "expanded_size": { "width": 480, "height": 240 }
+  },
+  "plugins": [
+    {
+      "id": "com.plinken.spectrum",
+      "name": "Spectrum",
+      "features": ["audio-effect", "analyzer", "utility"],
+      "has_ui": true
+    }
+  ]
+}

@@ -69,6 +69,13 @@ const STYLES = `
   color: var(--accent);
   line-height: 1;
   text-align: center;
+  /* Keep width independent of value width so the readout text growing
+     (e.g. "10 ms" → "500 ms") doesn't widen the fader column and shift
+     surrounding widgets. Tabular nums stabilises digit width; min-width
+     reserves space for the widest expected reading. */
+  min-width: 7ch;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .fader-label {
   font-family: var(--font-display);
@@ -196,7 +203,14 @@ export class Fader {
     const norm = Math.max(0, Math.min(1, this.#valueToNorm(this.value)));
     const pct = (norm * 100).toFixed(1);
     this.fillEl.style.height = pct + '%';
-    this.thumbEl.style.top = `calc(${(1 - norm) * 100}% )`;
+    // Position the thumb so its bounding box stays inside the track:
+    // when norm=1 the thumb's top edge sits at the track top (not its
+    // center), so it doesn't bleed up into the readout. Combined with
+    // the `translateY(-50%)` in the thumb CSS, the center lands at
+    // `thumbH/2 + (1-norm) * (trackH - thumbH)`.
+    const t = (1 - norm).toFixed(4);
+    this.thumbEl.style.top =
+      `calc(${t} * (100% - var(--fader-thumb-h, 10px)) + var(--fader-thumb-h, 10px) / 2)`;
     this.readoutEl.textContent = this.format(this.value);
   }
 

@@ -27,6 +27,50 @@ export function encodeSet(id, value) {
   return buf;
 }
 
+// Decode `{ "spec": <byte string of f32 big-endian values> }`. Returns a
+// Float32Array of magnitudes (the Rust spectrum analyzer side encodes them
+// as dBFS, one f32 per log-spaced band). Returns null if the buffer doesn't
+// match this exact shape — callers should treat that as "not for me" and
+// fall through to other decoders.
+export function decodeSpectrumSnapshot(ab) {
+  const view = new DataView(ab);
+  let p = 0;
+  if (view.byteLength < 1 + 1 + 4 + 1) return null;
+  if (view.getUint8(p++) !== 0xa1) return null;
+  if (view.getUint8(p++) !== 0x64) return null; // text(4)
+  if (
+    view.getUint8(p) !== 0x73 ||
+    view.getUint8(p + 1) !== 0x70 ||
+    view.getUint8(p + 2) !== 0x65 ||
+    view.getUint8(p + 3) !== 0x63
+  ) return null;
+  p += 4;
+  // Byte-string length: short form (0x40+len), u8 (0x58), or u16 (0x59).
+  const head = view.getUint8(p++);
+  let len;
+  if ((head & 0xe0) !== 0x40) return null;
+  const short = head & 0x1f;
+  if (short < 24) {
+    len = short;
+  } else if (short === 24) {
+    if (view.byteLength < p + 1) return null;
+    len = view.getUint8(p); p += 1;
+  } else if (short === 25) {
+    if (view.byteLength < p + 2) return null;
+    len = view.getUint16(p, false); p += 2;
+  } else {
+    return null;
+  }
+  if (view.byteLength < p + len) return null;
+  if (len % 4 !== 0) return null;
+  const n = len / 4;
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    out[i] = view.getFloat32(p + i * 4, false);
+  }
+  return out;
+}
+
 // Decode `{ "params": { <u32>: <f64>, ... } }`. Returns Map<id, value> or null.
 // Used for both initial snapshots and meter / readonly param updates.
 export function decodeParamsSnapshot(ab) {

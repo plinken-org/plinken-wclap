@@ -314,10 +314,6 @@ async function ensureChainNode(): Promise<AudioWorkletNode> {
     processorOptions: { host: host.initObj() }
   });
   chainNode.port.onmessage = onWorkletMessage;
-  // Synthetic ping: if the worklet receives this, main→worklet messaging
-  // works at all. The worklet will dbg-echo it back.
-  console.log('[host] posting ping to worklet');
-  chainNode.port.postMessage({ kind: 'ping', from: 'main' });
 
   iframeBridge = new IframeBridge({
     port: chainNode.port,
@@ -363,8 +359,6 @@ function minimalHostImports() {
 }
 
 let iframeBridge: IframeBridge | null = null;
-let webviewMsgCount = 0;
-let lastWebviewLogAt = 0;
 
 const pendingRequests = new Map<number, (data: unknown) => void>();
 let nextRequestId = 1;
@@ -386,33 +380,6 @@ function onWorkletMessage(e: MessageEvent): void {
     return;
   }
   if (typeof data !== 'object') return;
-  if (data.kind === 'dbg') {
-    console.log(data.msg);
-    return;
-  }
-  // Skip the per-snapshot webview channel — fires ~30 Hz per plugin and
-  // floods devtools if logged. Everything else is sporadic, so log it.
-  if (data.kind !== 'webview') {
-    console.log('[host] worklet →', data.kind, data);
-  } else {
-    // Sample-print one webview byte-length per second, so we can confirm
-    // plugin→iframe traffic is flowing without flooding devtools.
-    webviewMsgCount++;
-    const now = Date.now();
-    if (now - lastWebviewLogAt > 1000) {
-      console.log(`[host] webview msgs in last sec: ${webviewMsgCount} (this one: ${(data.buf as ArrayBuffer)?.byteLength}b → slot ${data.slot})`);
-      webviewMsgCount = 0;
-      lastWebviewLogAt = now;
-    }
-  }
-  if (data.kind === 'worklet-alive') {
-    setStatus(ui, `Worklet alive (${data.at}). Waiting for host…`);
-    return;
-  }
-  if (data.kind === 'pong') {
-    setStatus(ui, `Worklet pong received — main→worklet messaging confirmed.`);
-    return;
-  }
   if (data.kind === 'msgerror') {
     showError(
       ui,
@@ -1249,20 +1216,7 @@ async function loadIntoSlot(
     // under the `<pluginPath>/module.wasm` key.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { module: _strippedModule, ...wclapForWorklet } = wclapConfig as Record<string, unknown>;
-    console.log('[host] sending load to worklet', {
-      slot: idx,
-      pluginId,
-      files: Object.keys(files).length,
-      pluginPath: (wclapConfig as { pluginPath?: string }).pluginPath
-    });
-    try {
-      node.port.postMessage({ kind: 'load', slot: idx, wclap: wclapForWorklet, pluginId: targetPluginId });
-      console.log('[host] postMessage(load) returned without throwing');
-    } catch (postErr) {
-      console.error('[host] postMessage(load) threw', postErr);
-      throw postErr;
-    }
-    setStatus(ui, `Posting ${name} to chain worklet…`);
+    node.port.postMessage({ kind: 'load', slot: idx, wclap: wclapForWorklet, pluginId: targetPluginId });
   } catch (e) {
     showError(ui, e);
     setStatus(ui, `Failed to load slot ${idx + 1}.`);
@@ -1644,7 +1598,6 @@ async function respondProxy(
 ): Promise<void> {
   const body = await lookupProxyFile(path);
   const mime = body ? mimeForPath(path) : undefined;
-  console.log('[host] proxy', path, '→', body ? `${body.byteLength}b ${mime}` : 'NOT FOUND');
   source.postMessage({ type: 'plugin-proxy-response', id, body, mime });
 }
 

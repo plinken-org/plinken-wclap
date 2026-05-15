@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "generatedAt": "2026-05-15T12:40:57.351Z",
+  "generatedAt": "2026-05-15T15:25:38.008Z",
   "items": [
     {
       "id": "com.plinken.auto-pan",
@@ -33,6 +33,45 @@
           "name": "Auto-Pan",
           "features": [
             "audio-effect",
+            "utility"
+          ],
+          "has_ui": true
+        }
+      ]
+    },
+    {
+      "id": "com.plinken.spectrum",
+      "label": "Plinken: Spectrum",
+      "url": "/samples/com.plinken.spectrum.wclap.tar.gz",
+      "vendor": "Plinken",
+      "license": "MIT",
+      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/spectrum",
+      "version": "0.0.1",
+      "description": "Real-time spectrum analyzer. Audio passes through unchanged; an FFT side-tap pushes 64 log-spaced magnitude bands to the UI at ~30 Hz.",
+      "features": [
+        "audio-effect",
+        "analyzer",
+        "utility"
+      ],
+      "homepage": "https://plinken.org",
+      "has_ui": true,
+      "ui": {
+        "compact_size": {
+          "width": 360,
+          "height": 56
+        },
+        "expanded_size": {
+          "width": 480,
+          "height": 240
+        }
+      },
+      "plugins": [
+        {
+          "id": "com.plinken.spectrum",
+          "name": "Spectrum",
+          "features": [
+            "audio-effect",
+            "analyzer",
             "utility"
           ],
           "has_ui": true
@@ -73,7 +112,7 @@
       "vendor": "Plinken",
       "license": "MIT",
       "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/vocal-limiter",
-      "version": "0.0.1",
+      "version": "0.0.6",
       "description": "Lookahead peak limiter tuned for vocals. MVP scaffold — ceiling/attack/release hardcoded, parameters land in a follow-up.",
       "features": [
         "audio-effect",

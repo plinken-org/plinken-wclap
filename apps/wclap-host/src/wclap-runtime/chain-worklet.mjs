@@ -37,10 +37,11 @@ class ChainProcessor extends AudioWorkletProcessor {
     this.maxFrames = 128;
     this.hostReadyPromise = new Promise((r) => (this.hostReadyResolve = r));
 
+    // messageerror fires when structured-clone deserialization fails inside
+    // the audio realm (most common cause: a WebAssembly.Module slipped into
+    // the message — Chromium refuses to transfer them over an AudioWorklet
+    // port). Post a structured 'msgerror' so main can surface it in the UI.
     this.port.onmessageerror = (e) => {
-      // MessageEvent is opaque on messageerror — the failed payload isn't
-      // deserialized so e.data is null. Dump what little we can and post
-      // a structured 'msgerror' the main side can show in the UI.
       this.port.postMessage({
         kind: 'msgerror',
         info: {
@@ -51,35 +52,10 @@ class ChainProcessor extends AudioWorkletProcessor {
         }
       });
     };
-    this.port.onmessage = (e) => {
-      if (e?.data?.kind === 'ping') {
-        this.port.postMessage({ kind: 'pong', from: 'worklet' });
-        return;
-      }
-      this.onMessage(e.data);
-    };
-    // Explicit, structured "I'm alive" envelope (not a dbg string) so it's
-    // easy to spot in the console even with filters on.
-    this.port.postMessage({ kind: 'worklet-alive', at: 'constructor' });
+    this.port.onmessage = (e) => this.onMessage(e.data);
 
     const opts = options?.processorOptions || {};
     if (opts.host) this.startHost(opts.host).catch((e) => this.fail(e));
-  }
-
-  // Debug helper — console.log inside an AudioWorklet doesn't reliably
-  // reach the page console (especially while the AudioContext is
-  // suspended), so we ship debug strings back over the MessagePort and
-  // log them on the main thread instead.
-  dbg(...args) {
-    let str = '';
-    for (const a of args) {
-      if (typeof a === 'string') str += (str ? ' ' : '') + a;
-      else {
-        try { str += (str ? ' ' : '') + JSON.stringify(a); }
-        catch { str += (str ? ' ' : '') + String(a); }
-      }
-    }
-    this.port.postMessage({ kind: 'dbg', msg: str });
   }
 
   async startHost(hostInit) {
@@ -189,7 +165,6 @@ class ChainProcessor extends AudioWorkletProcessor {
   }
 
   async handleLoad({ slot, wclap, pluginId }) {
-    this.dbg('[chain] handleLoad start', { slot, pluginId, hasWclap: !!wclap });
     if (!this.hostReady) await this.hostReadyPromise;
     if (slot < 0 || slot >= NUM_SLOTS) throw new Error('slot out of range: ' + slot);
     if (this.slots[slot]) await this.unloadSlot(slot);
@@ -201,23 +176,18 @@ class ChainProcessor extends AudioWorkletProcessor {
       const wasmPath = `${wclap.pluginPath}/module.wasm`;
       const wasmBytes = wclap.files?.[wasmPath];
       if (!wasmBytes) throw new Error('handleLoad: wasm bytes missing at ' + wasmPath);
-      this.dbg('[chain] compiling wasm in worklet, bytes =', wasmBytes.byteLength);
       wclap.module = await WebAssembly.compile(wasmBytes);
-      this.dbg('[chain] compile done');
     }
 
     const wclapInstance = await this.host.startWclap(wclap, (_host, _threadData) => {
       // No worker threads in the vocal chain — plugins run single-threaded.
       return false;
     });
-    this.dbg('[chain] startWclap done, ptr =', wclapInstance.ptr);
     const hostedPtr = this.hostApi.makeHosted(wclapInstance.ptr);
     if (!hostedPtr) throw new Error('makeHosted failed');
 
     // Enumerate every plugin in the bundle so the host can show a cycle
-    // widget when the bundle has more than one. We always call getInfo()
-    // (not just on the "no override" path) so the host sees the full list
-    // regardless of how the load was triggered.
+    // widget when the bundle has more than one.
     const bundleInfo = this.decodeCbor(this.hostApi.getInfo(hostedPtr, this.hostedBytes));
     const bundlePlugins = Array.isArray(bundleInfo?.plugins) ? bundleInfo.plugins : [];
 
@@ -226,7 +196,6 @@ class ChainProcessor extends AudioWorkletProcessor {
       resolvedId = bundlePlugins[0]?.id;
       if (!resolvedId) throw new Error('bundle has no plugins');
     }
-    this.dbg('[chain] resolved plugin id =', resolvedId);
 
     // createPlugin takes the plugin id as a wasm-side string. The host owns
     // a scratch "bytes" pointer we re-use to ship the bytes across.
@@ -234,7 +203,6 @@ class ChainProcessor extends AudioWorkletProcessor {
     this.writeHostBytes(idBytes);
     const pluginPtr = this.hostApi.createPlugin(hostedPtr, this.hostedBytes);
     if (!pluginPtr) throw new Error('createPlugin failed for ' + resolvedId);
-    this.dbg('[chain] createPlugin done, pluginPtr =', pluginPtr);
 
     const audioPointers = this.decodeCbor(
       this.hostApi.pluginStart(
@@ -246,7 +214,6 @@ class ChainProcessor extends AudioWorkletProcessor {
       )
     );
     if (!audioPointers) throw new Error('pluginStart failed');
-    this.dbg('[chain] pluginStart done, audioPointers =', audioPointers);
 
     const pluginInfo = this.decodeCbor(
       this.hostApi.pluginGetInfo(pluginPtr, this.hostedBytes)
@@ -270,7 +237,6 @@ class ChainProcessor extends AudioWorkletProcessor {
     // Run one main-thread tick so the plugin can finish setup.
     this.hostApi.pluginMainThread(pluginPtr);
 
-    this.dbg('[chain] posting loaded for slot', slot);
     this.port.postMessage({
       kind: 'loaded',
       slot,

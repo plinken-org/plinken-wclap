@@ -3,7 +3,7 @@
   "id": "com.plinken.vocal-limiter",
   "name": "Vocal Limiter",
   "vendor": "Plinken",
-  "version": "0.0.1",
+  "version": "0.0.6",
   "description": "Lookahead peak limiter tuned for vocals. MVP scaffold — ceiling/attack/release hardcoded, parameters land in a follow-up.",
   "features": ["audio-effect", "limiter", "mastering"],
   "license": "MIT",

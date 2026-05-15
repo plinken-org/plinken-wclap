@@ -50,7 +50,7 @@
     display: flex;
     align-items: flex-start;
     gap: 24px;
-    justify-content: center;
+    justify-content: flex-start;
   }
   .root.expanded .controls {
     display: flex;
@@ -104,15 +104,16 @@
   const PID_RELEASE = 0x0002;
   const PID_STEREO_LINK = 0x0003;
   const PID_OUTPUT_TRIM = 0x0004;
+  const METER_PEAK_ID = 0x1000;
+  const METER_GR_ID = 0x1001;
 
   const transport = new Transport();
 
-  // --- controls -----------------------------------------------------------
   const threshold = new Fader(
     document.getElementById('ctrl-threshold'),
     {
       id: PID_THRESHOLD,
-      min: -24, max: 0, default: -1.0,
+      min: -40, max: 0, default: -1.0,
       unit: 'dB',
       label: 'Threshold',
     }
@@ -126,6 +127,7 @@
       log: true,
       unit: 'ms',
       label: 'Release',
+      format: v => `${Math.round(v)} ms`,
     }
   );
 
@@ -148,12 +150,10 @@
     }
   );
 
-  // Any control change → push `{set:[id,value]}` to plugin.
   for (const ctrl of [threshold, release, link, output]) {
     ctrl.onChange((v, id) => transport.sendSet(id, v));
   }
 
-  // --- meters (static -∞ until plugin pushes meter snapshots, Stage B) ---
   const peak = new Meter(
     document.getElementById('meter-peak'),
     { mode: 'peak', minDb: -60, maxDb: 0, hotDb: -6, clipDb: -0.5, label: 'Peak' }
@@ -165,18 +165,12 @@
   peak.setDb(-Infinity);
   gr.setDb(0);
 
-  // --- snapshot handling -------------------------------------------------
-  // When clap_host_webview.send is wired (Stage B), the plugin will push
-  // `{params:{id:value,...}}` here on demand. For now we just route any
-  // arriving snapshot to whichever widget owns the id.
   const widgets = new Map([
     [PID_THRESHOLD, threshold],
     [PID_RELEASE, release],
     [PID_STEREO_LINK, link],
     [PID_OUTPUT_TRIM, output],
   ]);
-  const METER_PEAK_ID = 0x1000;
-  const METER_GR_ID = 0x1001;
   transport.onSnapshot(params => {
     for (const [id, value] of params) {
       const w = widgets.get(id);
@@ -190,7 +184,6 @@
   });
   transport.sendReady();
 
-  // --- responsive ---------------------------------------------------------
   function applyLayout() {
     const root = document.getElementById('root');
     const compact = window.innerWidth < 320 || window.innerHeight < 90;

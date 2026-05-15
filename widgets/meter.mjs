@@ -62,6 +62,13 @@ const STYLES = `
 .meter-stack .readout {
   font-size: 0.65rem;
   color: var(--accent);
+  /* Reserve enough width for the widest reading ("-60.0 dB" / "−∞") so
+     the column doesn't widen and shift surrounding widgets as the value
+     changes. Tabular nums keeps digit widths consistent. */
+  min-width: 8ch;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 `;
 
@@ -128,8 +135,11 @@ export class Meter {
       stack.appendChild(lab);
     }
 
-    this.#tick = this.#tick.bind(this);
-    this.#raf = requestAnimationFrame(this.#tick);
+    // `#tick` is a private *method* — methods aren't writable, so we can't
+    // assign `this.#tick = this.#tick.bind(this)`. Keep the bound copy in a
+    // separate field instead and pass that to requestAnimationFrame.
+    this.#tickBound = () => this.#tick();
+    this.#raf = requestAnimationFrame(this.#tickBound);
   }
 
   /**
@@ -166,6 +176,7 @@ export class Meter {
   }
 
   #raf = 0;
+  #tickBound = () => {};
   #tick() {
     this.peakNorm = Math.max(this.currentNorm, this.peakNorm - this.decayRate);
     const pct = (this.currentNorm * 100).toFixed(1);
@@ -187,6 +198,6 @@ export class Meter {
         this.readoutEl.textContent = `${this.currentDb.toFixed(1)} dB`;
       }
     }
-    this.#raf = requestAnimationFrame(this.#tick);
+    this.#raf = requestAnimationFrame(this.#tickBound);
   }
 }

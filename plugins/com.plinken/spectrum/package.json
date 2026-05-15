@@ -1,0 +1,11 @@
+{
+  "name": "@plinken/spectrum",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Plinken real-time spectrum analyzer (com.plinken)",
+  "scripts": {
+    "build:wasm": "cargo build -p com-plinken-spectrum --target wasm32-unknown-unknown --release && mkdir -p dist && cp ../../../target/wasm32-unknown-unknown/release/com_plinken_spectrum.wasm dist/spectrum.wclap.wasm",
+    "build": "pnpm run build:wasm && node ../../../scripts/bundle-wclap.mjs ."
+  }
+}
