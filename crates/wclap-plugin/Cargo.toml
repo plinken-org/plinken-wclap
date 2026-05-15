@@ -1,0 +1,20 @@
+[package]
+name = "wclap-plugin"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Shared CLAP/WCLAP plugin scaffold for Plinken Rust plugins."
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+# Provides the wasm `#[panic_handler]` + dlmalloc `#[global_allocator]`.
+# Enabled by default for no_std consumers (like synome). Plugins that
+# pull in std (e.g. for fundsp) must disable this — std provides its own.
+default = ["runtime"]
+runtime = ["dep:dlmalloc"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+dlmalloc = { version = "0.2", features = ["global"], optional = true }

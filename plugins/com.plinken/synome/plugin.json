@@ -1,0 +1,23 @@
+{
+  "manifest_version": 1,
+  "id": "com.plinken.synome",
+  "name": "Synome",
+  "vendor": "Plinken",
+  "version": "0.0.1",
+  "description": "Polyphonic synthesizer with anti-aliased BLEP oscillators. (Phase A scaffold — silent.)",
+  "features": ["instrument", "synthesizer"],
+  "license": "MIT",
+  "homepage": "https://plinken.org",
+  "source": "src/",
+  "artifact": "dist/synome.wclap.tar.gz",
+  "format": "tar.gz",
+  "has_ui": false,
+  "plugins": [
+    {
+      "id": "com.plinken.synome",
+      "name": "Synome",
+      "features": ["instrument", "synthesizer"],
+      "has_ui": false
+    }
+  ]
+}

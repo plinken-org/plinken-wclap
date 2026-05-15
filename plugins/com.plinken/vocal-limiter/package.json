@@ -1,0 +1,11 @@
+{
+  "name": "@plinken/vocal-limiter",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Plinken vocal lookahead limiter (com.plinken)",
+  "scripts": {
+    "build:wasm": "cargo build -p com-plinken-vocal-limiter --target wasm32-unknown-unknown --release && mkdir -p dist && cp ../../../target/wasm32-unknown-unknown/release/com_plinken_vocal_limiter.wasm dist/vocal-limiter.wclap.wasm",
+    "build": "pnpm run build:wasm && node ../../../scripts/bundle-wclap.mjs ."
+  }
+}

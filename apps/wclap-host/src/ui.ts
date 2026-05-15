@@ -26,6 +26,7 @@ export interface UiElements {
   midiStatus: HTMLElement;
   midiNotes: HTMLElement;
   midiPanic: HTMLButtonElement;
+  midiRescan: HTMLButtonElement;
 }
 
 export function getElements(): UiElements {
@@ -45,7 +46,8 @@ export function getElements(): UiElements {
     midiLed: el<HTMLElement>('midiLed'),
     midiStatus: el<HTMLElement>('midiStatus'),
     midiNotes: el<HTMLElement>('midiNotes'),
-    midiPanic: el<HTMLButtonElement>('midiPanic')
+    midiPanic: el<HTMLButtonElement>('midiPanic'),
+    midiRescan: el<HTMLButtonElement>('midiRescan')
   };
 }
 

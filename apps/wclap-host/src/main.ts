@@ -1686,6 +1686,54 @@ function refreshMidiInputsLabel(access: MIDIAccess): void {
   setMidiStatus(ui, names.length ? names.join(', ') : 'no device');
 }
 
+// Module-level so the rescan button can re-iterate without re-requesting
+// permission. Set once `requestMIDIAccess` resolves.
+let midiAccess: MIDIAccess | null = null;
+
+function rescanMidi(): void {
+  if (!midiAccess) {
+    // First call to the rescan button after a denied / unsupported state
+    // is a chance to try again — re-running setupWebMidi covers it.
+    void setupWebMidi();
+    return;
+  }
+  for (const input of midiAccess.inputs.values()) wireMidiInput(input);
+  refreshMidiInputsLabel(midiAccess);
+  flashMidiLed(ui);
+  setStatus(ui, `MIDI rescanned: ${midiAccess.inputs.size} input(s).`);
+}
+ui.midiRescan.addEventListener('click', rescanMidi);
+
+function wireMidiInput(input: MIDIInput): void {
+  input.onmidimessage = (ev) => {
+    flashMidiLed(ui); // any MIDI byte stream blinks the LED
+    const data = ev.data;
+    if (!data || data.length < 1) return;
+    const status = data[0] ?? 0;
+    const high = status & 0xf0;
+    const channel = status & 0x0f;
+    const key = data[1] ?? 0;
+    const velRaw = data[2] ?? 0;
+    if (high === 0x90 && velRaw > 0) {
+      const velocity = velRaw / 127;
+      heldNotes.set(`${channel}:${key}`, { key, vel: velocity });
+      refreshMidiNotesUi();
+      fanoutEvent(encodeClapNoteEvent(true, channel, key, velocity));
+    } else if (high === 0x80 || (high === 0x90 && velRaw === 0)) {
+      if (heldNotes.delete(`${channel}:${key}`)) refreshMidiNotesUi();
+      fanoutEvent(encodeClapNoteEvent(false, channel, key, velRaw / 127));
+    } else if (
+      high === 0xb0 || // CC
+      high === 0xe0 || // pitch bend
+      high === 0xd0 || // channel aftertouch
+      high === 0xa0 || // poly aftertouch
+      high === 0xc0    // program change
+    ) {
+      fanoutEvent(encodeClapMidiEvent(data));
+    }
+  };
+}
+
 async function setupWebMidi(): Promise<void> {
   if (typeof navigator === 'undefined' || !navigator.requestMIDIAccess) {
     setMidiStatus(ui, 'Web MIDI unsupported');
@@ -1699,45 +1747,14 @@ async function setupWebMidi(): Promise<void> {
     setMidiStatus(ui, 'permission denied');
     return;
   }
-
-  const wire = (input: MIDIInput): void => {
-    input.onmidimessage = (ev) => {
-      flashMidiLed(ui); // any MIDI byte stream blinks the LED
-      const data = ev.data;
-      if (!data || data.length < 1) return;
-      const status = data[0] ?? 0;
-      const high = status & 0xf0;
-      const channel = status & 0x0f;
-      const key = data[1] ?? 0;
-      const velRaw = data[2] ?? 0;
-      // Note-on with velocity 0 is conventionally a note-off.
-      if (high === 0x90 && velRaw > 0) {
-        const velocity = velRaw / 127;
-        heldNotes.set(`${channel}:${key}`, { key, vel: velocity });
-        refreshMidiNotesUi();
-        fanoutEvent(encodeClapNoteEvent(true, channel, key, velocity));
-      } else if (high === 0x80 || (high === 0x90 && velRaw === 0)) {
-        if (heldNotes.delete(`${channel}:${key}`)) refreshMidiNotesUi();
-        fanoutEvent(encodeClapNoteEvent(false, channel, key, velRaw / 127));
-      } else if (
-        high === 0xb0 || // CC
-        high === 0xe0 || // pitch bend
-        high === 0xd0 || // channel aftertouch
-        high === 0xa0 || // poly aftertouch
-        high === 0xc0    // program change (rare but harmless)
-      ) {
-        fanoutEvent(encodeClapMidiEvent(data));
-      }
-      // SysEx (0xF0) is multi-byte; would need clap_event_midi_sysex —
-      // skip for now.
-    };
-  };
-
-  for (const input of access.inputs.values()) wire(input);
+  midiAccess = access;
+  for (const input of access.inputs.values()) wireMidiInput(input);
   refreshMidiInputsLabel(access);
   access.onstatechange = (ev) => {
     const port = (ev as MIDIConnectionEvent).port;
-    if (port instanceof MIDIInput && port.state === 'connected') wire(port);
+    if (port instanceof MIDIInput && port.state === 'connected') {
+      wireMidiInput(port);
+    }
     refreshMidiInputsLabel(access);
   };
 

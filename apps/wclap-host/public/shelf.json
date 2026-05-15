@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "generatedAt": "2026-05-14T09:30:32.625Z",
+  "generatedAt": "2026-05-15T07:20:31.573Z",
   "items": [
     {
       "id": "com.plinken.auto-pan",
@@ -36,6 +36,62 @@
             "utility"
           ],
           "has_ui": true
+        }
+      ]
+    },
+    {
+      "id": "com.plinken.synome",
+      "label": "Plinken: Synome",
+      "url": "/samples/com.plinken.synome.wclap.tar.gz",
+      "vendor": "Plinken",
+      "license": "MIT",
+      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/synome",
+      "version": "0.0.1",
+      "description": "Polyphonic synthesizer with anti-aliased BLEP oscillators. (Phase A scaffold — silent.)",
+      "features": [
+        "instrument",
+        "synthesizer"
+      ],
+      "homepage": "https://plinken.org",
+      "has_ui": false,
+      "plugins": [
+        {
+          "id": "com.plinken.synome",
+          "name": "Synome",
+          "features": [
+            "instrument",
+            "synthesizer"
+          ],
+          "has_ui": false
+        }
+      ]
+    },
+    {
+      "id": "com.plinken.vocal-limiter",
+      "label": "Plinken: Vocal Limiter",
+      "url": "/samples/com.plinken.vocal-limiter.wclap.tar.gz",
+      "vendor": "Plinken",
+      "license": "MIT",
+      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/vocal-limiter",
+      "version": "0.0.1",
+      "description": "Lookahead peak limiter tuned for vocals. MVP scaffold — ceiling/attack/release hardcoded, parameters land in a follow-up.",
+      "features": [
+        "audio-effect",
+        "limiter",
+        "mastering"
+      ],
+      "homepage": "https://plinken.org",
+      "has_ui": false,
+      "plugins": [
+        {
+          "id": "com.plinken.vocal-limiter",
+          "name": "Vocal Limiter",
+          "features": [
+            "audio-effect",
+            "limiter",
+            "mastering"
+          ],
+          "has_ui": false
         }
       ]
     },

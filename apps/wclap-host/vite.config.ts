@@ -94,6 +94,8 @@ export default defineConfig({
     }
   },
   server: {
+    port: 5174,
+    strictPort: true,
     headers: {
       // Cross-origin isolation gates SharedArrayBuffer, which `wclap-host-js`
       // uses when threads are available. Safe to send unconditionally; if the

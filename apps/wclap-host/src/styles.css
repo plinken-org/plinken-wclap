@@ -696,6 +696,9 @@ h1 {
   font-size: 0.72rem;
   letter-spacing: 0.04em;
   padding: 0.2rem 0.55rem;
+  min-width: 7.5rem;
+  text-align: center;
+  white-space: nowrap;
   background: transparent;
   color: var(--text-dim);
   border: 1px solid var(--border-soft);

@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/wclap-host"]
+members = [
+    "crates/wclap-host",
+    "crates/wclap-plugin",
+    "plugins/com.plinken/synome",
+    "plugins/com.plinken/vocal-limiter",
+]
 
 [profile.release]
 opt-level = "s"

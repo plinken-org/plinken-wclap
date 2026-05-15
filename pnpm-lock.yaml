@@ -70,6 +70,8 @@ importers:
         specifier: ^0.28.9
         version: 0.28.17
 
+  plugins/com.plinken/synome: {}
+
 packages:
 
   '@assemblyscript/wasi-shim@0.1.0':
