@@ -11,13 +11,17 @@
   "source": "src/",
   "artifact": "dist/vocal-limiter.wclap.tar.gz",
   "format": "tar.gz",
-  "has_ui": false,
+  "has_ui": true,
+  "ui": {
+    "compact_size":  { "width": 360, "height": 56 },
+    "expanded_size": { "width": 480, "height": 240 }
+  },
   "plugins": [
     {
       "id": "com.plinken.vocal-limiter",
       "name": "Vocal Limiter",
       "features": ["audio-effect", "limiter", "mastering"],
-      "has_ui": false
+      "has_ui": true
     }
   ]
 }

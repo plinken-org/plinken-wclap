@@ -128,6 +128,21 @@ async function main() {
       const rel = relative(root, file).replaceAll('\\', '/');
       entries.push({ path: rel, content: await readFile(file) });
     }
+
+    // Shared widget library — `widgets/` at the repo root. Plugins that
+    // have a UI get a copy bundled in at `widgets/...`, so their
+    // ui/index.html can do `import { Meter } from '../widgets/meter.mjs'`.
+    // Plugins without a UI skip this to keep their tarball tiny.
+    //
+    // Path traversal: bundle-wclap.mjs lives in <repo>/scripts/, so the
+    // repo root is two `..` up from this file.
+    const widgetsDir = resolve(dirname(new URL(import.meta.url).pathname), '..', 'widgets');
+    if (existsSync(widgetsDir)) {
+      for await (const file of walk(widgetsDir)) {
+        const rel = ('widgets/' + relative(widgetsDir, file)).replaceAll('\\', '/');
+        entries.push({ path: rel, content: await readFile(file) });
+      }
+    }
   }
 
   // Sort for deterministic output — useful for content-hashing and diffs.

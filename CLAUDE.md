@@ -69,3 +69,75 @@ pnpm --filter @plinken/site deploy        # build + deploy to Cloudflare Workers
 - New JS/TS packages go under `apps/` or `plugins/` and use `@plinken/<name>` as their npm name.
 - Cloudflare config (`wrangler.jsonc`) holds **non-secret** settings only. Bindings → run `wrangler types` to regenerate `Env`; never hand-write the type.
 - Svelte components in `apps/site` use **Svelte 5 runes** (`$state`, `$derived`, `$effect`, `$props`) — not the legacy reactive `$:` / store syntax.
+
+## Rust WCLAP plugin gotchas
+
+Three sharp edges, all bitten before — read these before touching `crates/wclap-plugin` or scaffolding a new Rust plugin under `plugins/`.
+
+### 1. `build.rs` needs BOTH linker flags
+
+```rust
+println!("cargo:rustc-cdylib-link-arg=--export-table");
+println!("cargo:rustc-cdylib-link-arg=--growable-table");
+```
+
+Without `--growable-table`, rust-lld emits the wasm function table with `max == initial`. The host then fails at load with `RangeError: WebAssembly.Table.grow()` when it tries to install host trampolines. Copy `build.rs` from `plugins/com.plinken/vocal-limiter/` for any new plugin.
+
+### 2. `clap_entry` must be the struct itself, not a pointer wrapper
+
+`crates/wclap-plugin` declares:
+
+```rust
+#[no_mangle]
+pub static mut clap_entry: ClapEntry = ClapEntry { … };
+```
+
+**Not** a separate `pub static clap_entry: StaticAddr = StaticAddr(addr_of!(ENTRY) as *const ())`. For a `pub static X`, rust-lld exports the wasm global with VALUE = the static's *address*, not its content. The wrapper form makes the host read `(slot_address + 12 / 16 / 20)` instead of `(ENTRY_address + 12 / 16 / 20)` — which lands in a neighbouring static and yields `WebAssembly.Table.get(): invalid address …`.
+
+### 3. No `Box<dyn AudioUnit>` for fundsp graphs
+
+Our `[profile.release]` has `lto = true, codegen-units = 1`. The linker drops trait methods it deems unreachable, but a dyn vtable still indexes them — first call into a dead slot traps with `RuntimeError: null function`. Always store fundsp graphs as concrete types:
+
+```rust
+// ❌ crashes at load/activate
+struct Plug { unit: Box<dyn AudioUnit> }
+
+// ✅ static dispatch, works
+struct Plug { unit: An<Limiter<U2>> }
+
+// ✅ also fine — hide the generic plumbing behind a builder
+fn build() -> An<impl AudioNode<Sample = f32, Inputs = U2, Outputs = U2>> { … }
+```
+
+Call AudioUnit methods via UFCS to get the slice-based `tick` (because `An<X>`'s inherent `tick` takes a `Frame<f32, U2>` instead):
+
+```rust
+AudioUnit::tick(&mut self.unit, &buf_in, &mut buf_out);
+AudioUnit::set_sample_rate(&mut self.unit, sample_rate);
+```
+
+Applies to every Rust plugin we ship (vocal-* trio, synome's future voice pool, etc.).
+
+## How a plugin UI iframe is routed
+
+The flow from "plugin has a UI" to "iframe shows content" is non-obvious; we bit a bug on it shipping vocal-limiter. The full path:
+
+1. **`plugin.json` declares `has_ui: true`** + panel sizes. This is a *hint* the host uses for chrome (rack strip layout, panel size). It does **not** trigger UI loading on its own.
+
+2. **The plugin (wasm side) implements the `clap.webview/3` extension.** Our shared crate (`crates/wclap-plugin`) provides this — set `ui_path: Some(b"/ui/index.html\0")` in `PluginDef`. When the host queries `plugin.get_extension("clap.webview/3")`, the scaffold returns a populated `clap_plugin_webview` struct; otherwise the host concludes "no UI" and silently skips the iframe.
+
+3. **`entry.init(modulePath)` delivers the per-instance path.** The host allocates a NUL-terminated string in plugin memory like `"/plugin/<hash>"` and passes its pointer to `entry.init`. Our scaffold stashes it. **This step is mandatory** — without it `webview.get_uri` can't produce a URI that matches the file map.
+
+4. **`webview.get_uri` composes `file:<modulePath><ui_path>`.** Two-call probe: `cap=0` returns byte length; `cap>0` writes the bytes + NUL. Final string is e.g. `file:/plugin/abc123/ui/index.html`.
+
+5. **The host strips `file:` and prepends `/plugin-proxy`**, yielding the iframe `src` = `/plugin-proxy/plugin/abc123/ui/index.html`.
+
+6. **The plugin-proxy service worker intercepts** that fetch, asks the host page for the bytes, which calls `effect.getFile('/plugin/abc123/ui/index.html')` against the tarball's file map (keys are `/plugin/<hash>/<filename>`). Match — the file is served.
+
+7. **Relative imports inside `ui/index.html`** (e.g. `import { Meter } from '../widgets/meter.mjs'`) resolve against the iframe URL and route through the SW the same way. The widgets/ folder is bundled into every plugin tarball with a UI by `scripts/bundle-wclap.mjs`.
+
+**Common failure modes & what they look like:**
+
+- *Plugin shows in rack but iframe is blank/white* → `get_uri` returned a URI without the `modulePath`. SW asks the host for a path that isn't in the file map, request 404s, no CSS loads, white background.
+- *No iframe appears at all* → plugin's `get_extension("clap.webview/3")` returned 0. Likely `ui_path: None` or extension wiring missing.
+- *Iframe loads, CSS works, but JS imports 404* → forgot to include `widgets/` in the bundler, or referenced path inside the iframe doesn't resolve back to a file-map key. Check `tar -tzf` of the built tarball.

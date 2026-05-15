@@ -110,11 +110,71 @@ mod offsets {
         pub const NAME_OFFSET: usize = 12;
         pub const SIZE: usize = 268;
     }
+    pub mod webview {
+        // clap_plugin_webview (draft v3) — three function pointers.
+        pub const GET_URI: usize = 0;       // i32(plugin*, char* buf, u32 cap)
+        pub const GET_RESOURCE: usize = 4;  // bool(plugin*, char* path, char* mime_buf, u32 mime_cap, ostream*)
+        pub const RECEIVE: usize = 8;       // bool(plugin*, void* buf, u32 size)
+        pub const SIZE: usize = 12;
+    }
+    pub mod params {
+        // clap_plugin_params — six function pointers. Layout matches what
+        // crates/wclap-host expects (param_info::SIZE = 1320 bytes).
+        pub const COUNT: usize = 0;          // u32(plugin*)
+        pub const GET_INFO: usize = 4;       // bool(plugin*, u32 idx, param_info*)
+        pub const GET_VALUE: usize = 8;      // bool(plugin*, u32 id, f64* out)
+        pub const VALUE_TO_TEXT: usize = 12; // bool(plugin*, u32 id, f64 v, char* buf, u32 cap)
+        pub const TEXT_TO_VALUE: usize = 16; // bool(plugin*, u32 id, char* text, f64* out)
+        pub const FLUSH: usize = 20;         // void(plugin*, in_events*, out_events*)
+        pub const SIZE: usize = 24;
+    }
+    pub mod param_info {
+        // 1320-byte struct host allocates; we write into it via offsets.
+        pub const ID: usize = 0;
+        pub const FLAGS: usize = 4;
+        pub const COOKIE: usize = 8;
+        pub const NAME: usize = 12;
+        pub const NAME_CAP: usize = 256;
+        pub const MODULE: usize = 268;
+        pub const MODULE_CAP: usize = 1024;
+        pub const MIN_VALUE: usize = 1296;
+        pub const MAX_VALUE: usize = 1304;
+        pub const DEFAULT_VALUE: usize = 1312;
+        pub const SIZE: usize = 1320;
+    }
+    pub mod latency {
+        // clap_plugin_latency — single function pointer.
+        pub const GET: usize = 0; // u32(plugin*)
+        pub const SIZE: usize = 4;
+    }
+    pub mod host {
+        // clap_host — what the host passes to factory.create_plugin.
+        // Offsets pinned to wclap-host's `clap.rs` so cross-module casts
+        // hit the right fields.
+        pub const GET_EXTENSION: usize = 32; // (host*, char*) -> ptr
+    }
+    pub mod host_webview {
+        // clap_host_webview — single function pointer the plugin calls to
+        // push bytes back to the iframe.
+        pub const SEND: usize = 0; // (host*, buf, size) -> bool
+        pub const SIZE: usize = 4;
+    }
 }
 
 const FACTORY_ID: &[u8] = b"clap.plugin-factory\0";
 const EXT_AUDIO_PORTS: &[u8] = b"clap.audio-ports\0";
 const EXT_NOTE_PORTS: &[u8] = b"clap.note-ports\0";
+const EXT_WEBVIEW: &[u8] = b"clap.webview/3\0";
+const EXT_PARAMS: &[u8] = b"clap.params\0";
+const EXT_LATENCY: &[u8] = b"clap.latency\0";
+
+/// CLAP param-info flag bits (subset).
+pub const PARAM_IS_STEPPED: u32 = 1 << 0;
+pub const PARAM_IS_PERIODIC: u32 = 1 << 1;
+pub const PARAM_IS_HIDDEN: u32 = 1 << 2;
+pub const PARAM_IS_READONLY: u32 = 1 << 3;
+pub const PARAM_IS_BYPASS: u32 = 1 << 4;
+pub const PARAM_IS_AUTOMATABLE: u32 = 1 << 5;
 
 const NOTE_DIALECT_CLAP: u32 = 1 << 0;
 const NOTE_DIALECT_MIDI: u32 = 1 << 1;
@@ -152,6 +212,29 @@ pub struct PluginDef {
     pub audio_outputs: u8,
     /// Number of note input ports (0 or 1).
     pub note_inputs: u8,
+    /// Path to the UI entrypoint inside the plugin's tarball, with leading
+    /// slash and NUL terminator — e.g. `b"/ui/index.html\0"`. Combined at
+    /// runtime with the host-supplied `modulePath` to form the full
+    /// `file:` URI (`file:/plugin/<hash>/ui/index.html`). `None` means the
+    /// plugin has no UI and the host won't load an iframe.
+    pub ui_path: Option<&'static [u8]>,
+}
+
+/// Static descriptor for one automatable parameter.
+pub struct ParamDef {
+    /// CLAP param ID — must be unique within the plugin and stable across
+    /// versions (used by hosts to look up saved automation).
+    pub id: u32,
+    /// Bitflag mask (combine `PARAM_IS_AUTOMATABLE`, `PARAM_IS_STEPPED`, …).
+    pub flags: u32,
+    /// Display name, NUL-terminated. Max 255 bytes useful (host buffer = 256).
+    pub name: &'static [u8],
+    /// Module path for parameter grouping in the host's automation lane
+    /// browser. Typically `b"\0"` for a flat layout.
+    pub module: &'static [u8],
+    pub min: f64,
+    pub max: f64,
+    pub default: f64,
 }
 
 /// The plugin's DSP state. One instance per host-side voice/track.
@@ -163,6 +246,33 @@ pub trait Plugin: Sized + 'static {
     fn stop_processing(&mut self) {}
     fn reset(&mut self) {}
     fn process(&mut self, ctx: &mut ProcessCtx) -> ProcessStatus;
+
+    /// Static list of parameters this plugin exposes. Default empty.
+    /// Hosts call this once at load to enumerate automation lanes.
+    fn params() -> &'static [ParamDef] {
+        &[]
+    }
+
+    /// Read the current value of param `id`. Plugins that don't override
+    /// `params()` can leave this default.
+    fn get_param(&self, _id: u32) -> f64 {
+        0.0
+    }
+
+    /// Apply a UI- or automation-driven param change. Called from inside
+    /// the audio process block (param events) and from `webview.receive`
+    /// (UI-driven `{set:[id,value]}` messages). The plugin should clamp
+    /// to the param's declared range itself if it cares.
+    fn set_param(&mut self, _id: u32, _value: f64) {}
+
+    /// Reported via `clap.latency.get` — the number of samples the plugin
+    /// delays its output relative to its input. 0 for feedback / feed-
+    /// forward designs; N samples for lookahead designs. Hosts use this to
+    /// add compensating delay on parallel chains and to schedule with the
+    /// correct slack budget. Default 0.
+    fn latency_samples(&self) -> u32 {
+        0
+    }
 }
 
 /// Safe view onto one block of audio passed by the host.
@@ -211,6 +321,50 @@ impl ProcessCtx {
             })
         }
     }
+
+    /// Borrow the main mono input + output (single channel each) as two
+    /// independent slices. Returns `None` if either port doesn't expose
+    /// at least one channel. Effects that want to handle both shapes try
+    /// `stereo_io()` first, then fall back to this.
+    pub fn mono_io(&mut self) -> Option<MonoIo<'_>> {
+        unsafe {
+            let (i, n) = channel_slice(self.process_ptr, true, 0, 0, false)?;
+            let (o, _) = channel_slice(self.process_ptr, false, 0, 0, true)?;
+            Some(MonoIo {
+                input: core::slice::from_raw_parts(i, n),
+                output: core::slice::from_raw_parts_mut(o, n),
+            })
+        }
+    }
+
+    /// Channel count of main input port 0 (`0` if no input port exists).
+    pub fn input_channel_count(&self) -> u32 {
+        unsafe { channel_count(self.process_ptr, true, 0) }
+    }
+
+    /// Channel count of main output port 0.
+    pub fn output_channel_count(&self) -> u32 {
+        unsafe { channel_count(self.process_ptr, false, 0) }
+    }
+
+    /// Push bytes to the plugin's UI iframe via `clap_host_webview.send`.
+    /// No-op if the host didn't expose `clap.webview/3` or the plugin
+    /// hasn't initialised (e.g. process called before init somehow).
+    ///
+    /// Typical use: encode a `{params:{<id>:<f64>, …}}` CBOR snapshot
+    /// with current peak / GR / readonly param values and push at ~30 Hz.
+    pub fn send_to_ui(&self, bytes: &[u8]) {
+        unsafe {
+            let host = DEF.host_ptr;
+            let send_idx = DEF.host_webview_send;
+            if host == 0 || send_idx == 0 || bytes.is_empty() {
+                return;
+            }
+            type Send = extern "C" fn(host: u32, buf: u32, size: u32) -> u32;
+            let f: Send = core::mem::transmute(send_idx as usize);
+            f(host, bytes.as_ptr() as u32, bytes.len() as u32);
+        }
+    }
 }
 
 /// Four-slice view of one stereo block.
@@ -219,6 +373,12 @@ pub struct StereoIo<'a> {
     pub input_r: &'a [f32],
     pub output_l: &'a mut [f32],
     pub output_r: &'a mut [f32],
+}
+
+/// Two-slice view of one mono block.
+pub struct MonoIo<'a> {
+    pub input: &'a [f32],
+    pub output: &'a mut [f32],
 }
 
 /// Zero every output channel of the current block. Convenience for "I'm
@@ -287,6 +447,28 @@ struct PortsExt {
     get: u32,
 }
 
+#[repr(C)]
+struct WebviewExt {
+    get_uri: u32,
+    get_resource: u32,
+    receive: u32,
+}
+
+#[repr(C)]
+struct ParamsExt {
+    count: u32,
+    get_info: u32,
+    get_value: u32,
+    value_to_text: u32,
+    text_to_value: u32,
+    flush: u32,
+}
+
+#[repr(C)]
+struct LatencyExt {
+    get: u32,
+}
+
 // The wasm global `clap_entry` exports the *address* of whatever static
 // is named that way. By naming the actual ClapEntry struct `clap_entry`,
 // the global directly points at the struct — no indirection slot, which
@@ -325,6 +507,20 @@ static mut DESCRIPTOR: ClapDescriptor = ClapDescriptor {
 
 static mut AUDIO_PORTS_EXT: PortsExt = PortsExt { count: 0, get: 0 };
 static mut NOTE_PORTS_EXT: PortsExt = PortsExt { count: 0, get: 0 };
+static mut WEBVIEW_EXT: WebviewExt = WebviewExt {
+    get_uri: 0,
+    get_resource: 0,
+    receive: 0,
+};
+static mut PARAMS_EXT: ParamsExt = ParamsExt {
+    count: 0,
+    get_info: 0,
+    get_value: 0,
+    value_to_text: 0,
+    text_to_value: 0,
+    flush: 0,
+};
+static mut LATENCY_EXT: LatencyExt = LatencyExt { get: 0 };
 
 // Room for up to 8 features. More than enough for any plugin we'll ship.
 const MAX_FEATURES: usize = 8;
@@ -338,12 +534,41 @@ struct DefSnapshot {
     audio_outputs: u8,
     note_inputs: u8,
     id_ptr: *const u8,
+    /// UI path bytes (NUL-terminated, leading slash) or null if no UI.
+    ui_path_ptr: *const u8,
+    /// Path length in bytes, EXCLUDING the trailing NUL.
+    ui_path_len: u32,
+    /// Pointer to the host-supplied `modulePath` C-string, captured during
+    /// `entry.init`. Lives in plugin memory (host allocated it via our
+    /// `malloc` and copied the bytes; it remains valid for our lifetime).
+    /// Zero until `entry.init` runs.
+    module_path_ptr: u32,
+    /// `Plugin::params()` slice base + length. Cached at `init_plugin<P>`
+    /// time so the C-ABI shims don't need to monomorphise on P themselves.
+    params_ptr: *const ParamDef,
+    params_len: u32,
+    /// Per-module host pointer captured at `factory.create_plugin`. Used
+    /// to call `host.get_extension` and (via `host_webview.send`) push
+    /// bytes back to the iframe. WCLAP gives each plugin its own wasm
+    /// module, so a static-per-module field is per-instance in practice.
+    host_ptr: u32,
+    /// Function-table index of `host_webview.send`. Resolved in
+    /// `plugin.init` by calling `host.get_extension("clap.webview/3")`;
+    /// 0 if the host doesn't expose the extension.
+    host_webview_send: u32,
 }
 static mut DEF: DefSnapshot = DefSnapshot {
     audio_inputs: 0,
     audio_outputs: 0,
     note_inputs: 0,
     id_ptr: core::ptr::null(),
+    ui_path_ptr: core::ptr::null(),
+    ui_path_len: 0,
+    module_path_ptr: 0,
+    params_ptr: core::ptr::null(),
+    params_len: 0,
+    host_ptr: 0,
+    host_webview_send: 0,
 };
 
 /// Per-plugin-type dispatch table. Populated by `init_plugin<P>` with
@@ -357,6 +582,9 @@ struct VTable {
     stop_processing: Option<fn(*mut ())>,
     reset: Option<fn(*mut ())>,
     process: Option<fn(*mut (), &mut ProcessCtx) -> ProcessStatus>,
+    get_param: Option<fn(*mut (), u32) -> f64>,
+    set_param: Option<fn(*mut (), u32, f64)>,
+    latency_samples: Option<fn(*mut ()) -> u32>,
 }
 
 static mut VTABLE: VTable = VTable {
@@ -368,6 +596,9 @@ static mut VTABLE: VTable = VTable {
     stop_processing: None,
     reset: None,
     process: None,
+    get_param: None,
+    set_param: None,
+    latency_samples: None,
 };
 
 // `clap_entry` itself is declared above as the actual ClapEntry struct;
@@ -416,6 +647,14 @@ pub fn init_plugin<P: Plugin>(def: &'static PluginDef) {
         DEF.audio_outputs = def.audio_outputs;
         DEF.note_inputs = def.note_inputs;
         DEF.id_ptr = def.id.as_ptr();
+        if let Some(path) = def.ui_path {
+            // `len - 1` strips the trailing NUL we required in PluginDef.
+            DEF.ui_path_ptr = path.as_ptr();
+            DEF.ui_path_len = (path.len() as u32).saturating_sub(1);
+            WEBVIEW_EXT.get_uri = webview_get_uri as usize as u32;
+            WEBVIEW_EXT.get_resource = webview_get_resource as usize as u32;
+            WEBVIEW_EXT.receive = webview_receive as usize as u32;
+        }
 
         VTABLE.new = Some(thunk_new::<P>);
         VTABLE.drop = Some(thunk_drop::<P>);
@@ -425,6 +664,25 @@ pub fn init_plugin<P: Plugin>(def: &'static PluginDef) {
         VTABLE.stop_processing = Some(thunk_stop::<P>);
         VTABLE.reset = Some(thunk_reset::<P>);
         VTABLE.process = Some(thunk_process::<P>);
+        VTABLE.get_param = Some(thunk_get_param::<P>);
+        VTABLE.set_param = Some(thunk_set_param::<P>);
+        VTABLE.latency_samples = Some(thunk_latency_samples::<P>);
+
+        // clap.latency is unconditionally exposed; plugins that don't
+        // override `latency_samples()` simply report 0.
+        LATENCY_EXT.get = latency_get as usize as u32;
+
+        let params_slice = P::params();
+        DEF.params_ptr = params_slice.as_ptr();
+        DEF.params_len = params_slice.len() as u32;
+        if !params_slice.is_empty() {
+            PARAMS_EXT.count = params_count as usize as u32;
+            PARAMS_EXT.get_info = params_get_info as usize as u32;
+            PARAMS_EXT.get_value = params_get_value as usize as u32;
+            PARAMS_EXT.value_to_text = params_value_to_text as usize as u32;
+            PARAMS_EXT.text_to_value = params_text_to_value as usize as u32;
+            PARAMS_EXT.flush = params_flush as usize as u32;
+        }
     }
 }
 
@@ -467,6 +725,18 @@ fn thunk_reset<P: Plugin>(p: *mut ()) {
 
 fn thunk_process<P: Plugin>(p: *mut (), ctx: &mut ProcessCtx) -> ProcessStatus {
     unsafe { (*(p as *mut P)).process(ctx) }
+}
+
+fn thunk_get_param<P: Plugin>(p: *mut (), id: u32) -> f64 {
+    unsafe { (*(p as *const P)).get_param(id) }
+}
+
+fn thunk_set_param<P: Plugin>(p: *mut (), id: u32, value: f64) {
+    unsafe { (*(p as *mut P)).set_param(id, value) }
+}
+
+fn thunk_latency_samples<P: Plugin>(p: *mut ()) -> u32 {
+    unsafe { (*(p as *const P)).latency_samples() }
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +788,27 @@ fn cstr_eq_static(ptr: u32, expected: *const u8) -> bool {
     }
 }
 
+/// Read the channel count for the requested port from the raw process
+/// struct. Returns 0 if the port index is out of range or the port table
+/// pointer is null.
+unsafe fn channel_count(process_ptr: u32, is_input: bool, port: usize) -> u32 {
+    let (ports_ptr_off, count_off) = if is_input {
+        (offsets::process_::AUDIO_INPUTS, offsets::process_::AUDIO_INPUTS_COUNT)
+    } else {
+        (offsets::process_::AUDIO_OUTPUTS, offsets::process_::AUDIO_OUTPUTS_COUNT)
+    };
+    let port_count = read_u32(process_ptr + count_off as u32) as usize;
+    if port >= port_count {
+        return 0;
+    }
+    let ports_ptr = read_u32(process_ptr + ports_ptr_off as u32);
+    if ports_ptr == 0 {
+        return 0;
+    }
+    let buf_ptr = ports_ptr + (port as u32) * (offsets::audio_buffer::SIZE as u32);
+    read_u32(buf_ptr + offsets::audio_buffer::CHANNEL_COUNT as u32)
+}
+
 /// Resolve `(channel_pointer, frame_count)` for a given port/channel from
 /// the raw process struct. `is_input` selects the input vs output side.
 unsafe fn channel_slice(
@@ -558,7 +849,14 @@ unsafe fn channel_slice(
 // clap_entry — init / get_factory
 // ---------------------------------------------------------------------------
 
-extern "C" fn entry_init(_plugin_path_ptr: u32) -> u32 {
+extern "C" fn entry_init(plugin_path_ptr: u32) -> u32 {
+    // The host passes us the per-instance modulePath (e.g.
+    // `/plugin/<hash>`) here. We stash it so `webview.get_uri` can build
+    // the absolute URI `file:<modulePath><ui_path>` that resolves through
+    // the SW proxy to the tarball's file map.
+    unsafe {
+        DEF.module_path_ptr = plugin_path_ptr;
+    }
     1
 }
 
@@ -584,10 +882,15 @@ extern "C" fn factory_get_plugin_descriptor(_factory_ptr: u32, index: u32) -> u3
     addr_of!(DESCRIPTOR) as u32
 }
 
-extern "C" fn factory_create_plugin(_factory: u32, _host: u32, plugin_id_ptr: u32) -> u32 {
+extern "C" fn factory_create_plugin(_factory: u32, host: u32, plugin_id_ptr: u32) -> u32 {
     let id_ptr = unsafe { DEF.id_ptr };
     if !cstr_eq_static(plugin_id_ptr, id_ptr) {
         return 0;
+    }
+    // Stash the host pointer so plugin.init can resolve host extensions
+    // and process() can later call host_webview.send for plugin→UI pushes.
+    unsafe {
+        DEF.host_ptr = host;
     }
 
     let plugin_ptr = malloc(offsets::plugin::SIZE as u32);
@@ -629,6 +932,26 @@ unsafe fn read_plugin_data(plugin_ptr: u32) -> *mut () {
 // ---------------------------------------------------------------------------
 
 extern "C" fn plugin_init(_plugin_ptr: u32) -> u32 {
+    // Resolve host_webview.send now (host.get_extension is guaranteed to
+    // work from plugin.init onward, per the CLAP spec). Failure is silent
+    // — the plugin just won't be able to push messages to the UI.
+    unsafe {
+        if DEF.host_ptr != 0 {
+            let get_ext_idx =
+                read_u32(DEF.host_ptr + offsets::host::GET_EXTENSION as u32);
+            if get_ext_idx != 0 {
+                static EXT: &[u8] = b"clap.webview/3\0";
+                type GetExt = extern "C" fn(host: u32, ext_id: u32) -> u32;
+                let f: GetExt = core::mem::transmute(get_ext_idx as usize);
+                let webview_struct = f(DEF.host_ptr, EXT.as_ptr() as u32);
+                if webview_struct != 0 {
+                    DEF.host_webview_send = read_u32(
+                        webview_struct + offsets::host_webview::SEND as u32,
+                    );
+                }
+            }
+        }
+    }
     1
 }
 
@@ -709,6 +1032,25 @@ extern "C" fn plugin_get_extension(_plugin_ptr: u32, ext_id_ptr: u32) -> u32 {
     if cstr_eq(ext_id_ptr, EXT_NOTE_PORTS) {
         return addr_of!(NOTE_PORTS_EXT) as u32;
     }
+    if cstr_eq(ext_id_ptr, EXT_WEBVIEW) {
+        // Only expose the extension if the plugin actually has a UI; the
+        // host treats a null return as "no UI" and skips the iframe.
+        if unsafe { !DEF.ui_path_ptr.is_null() } {
+            return addr_of!(WEBVIEW_EXT) as u32;
+        }
+    }
+    if cstr_eq(ext_id_ptr, EXT_PARAMS) {
+        // Only expose if the plugin declared at least one param.
+        if unsafe { DEF.params_len > 0 } {
+            return addr_of!(PARAMS_EXT) as u32;
+        }
+    }
+    if cstr_eq(ext_id_ptr, EXT_LATENCY) {
+        // Always exposed — plugins default to 0 samples if they don't
+        // override `latency_samples()`, which is the right answer for
+        // hosts that don't ask.
+        return addr_of!(LATENCY_EXT) as u32;
+    }
     0
 }
 
@@ -786,6 +1128,263 @@ extern "C" fn note_ports_get(_plugin: u32, index: u32, is_input: u32, info_ptr: 
     1
 }
 
+// ---------------------------------------------------------------------------
+// clap.webview/3 — two-call probe for `get_uri`, plus stub `receive` and
+// `get_resource`. The host serves the iframe's static assets out of the
+// tarball directly (via its `getFile` map), so `get_resource` is a no-op
+// that returns false to let the host fall back to its own resolver.
+// `receive` accepts but drops messages until clap.params is implemented —
+// once it lands, this is where we'll parse `{ set: [id, value] }` CBOR.
+// ---------------------------------------------------------------------------
+
+/// Compose `file:<modulePath><ui_path>` into the host-supplied buffer.
+/// Two-call probe: `cap == 0` returns required byte length (excluding the
+/// trailing NUL); `cap > 0` writes bytes (clamped) and terminates.
+///
+/// `modulePath` comes from `entry.init`; without it the URI would be
+/// `file:<ui_path>` which the SW proxy fails to match against the file
+/// map (which is keyed by `/plugin/<hash>/...`).
+extern "C" fn webview_get_uri(_plugin_ptr: u32, buf_ptr: u32, cap: u32) -> i32 {
+    const PREFIX: &[u8] = b"file:";
+
+    let (ui_ptr, ui_len) = unsafe { (DEF.ui_path_ptr, DEF.ui_path_len) };
+    if ui_ptr.is_null() {
+        return 0;
+    }
+    let module_ptr = unsafe { DEF.module_path_ptr };
+    let module_len = if module_ptr == 0 {
+        0
+    } else {
+        cstr_len(module_ptr)
+    };
+
+    let total = PREFIX.len() as u32 + module_len + ui_len;
+
+    if cap == 0 {
+        return total as i32;
+    }
+
+    let writable = core::cmp::min(total, cap.saturating_sub(1));
+    let dst = buf_ptr as *mut u8;
+    unsafe {
+        // "file:"
+        let p1 = core::cmp::min(writable, PREFIX.len() as u32);
+        core::ptr::copy_nonoverlapping(PREFIX.as_ptr(), dst, p1 as usize);
+
+        // module path
+        let remaining_after_prefix = writable.saturating_sub(p1);
+        let p2 = core::cmp::min(remaining_after_prefix, module_len);
+        if p2 > 0 {
+            core::ptr::copy_nonoverlapping(
+                module_ptr as *const u8,
+                dst.add(p1 as usize),
+                p2 as usize,
+            );
+        }
+
+        // ui path
+        let remaining_after_module = writable.saturating_sub(p1 + p2);
+        let p3 = core::cmp::min(remaining_after_module, ui_len);
+        if p3 > 0 {
+            core::ptr::copy_nonoverlapping(
+                ui_ptr,
+                dst.add((p1 + p2) as usize),
+                p3 as usize,
+            );
+        }
+
+        // NUL terminate
+        *dst.add(writable as usize) = 0;
+    }
+    total as i32
+}
+
+/// strlen for a u32-addressed NUL-terminated string in our linear memory.
+fn cstr_len(ptr: u32) -> u32 {
+    let mut n = 0u32;
+    loop {
+        let b = unsafe { *((ptr + n) as *const u8) };
+        if b == 0 {
+            return n;
+        }
+        n += 1;
+    }
+}
+
+extern "C" fn webview_get_resource(
+    _plugin_ptr: u32,
+    _path_ptr: u32,
+    _mime_buf: u32,
+    _mime_cap: u32,
+    _ostream_ptr: u32,
+) -> u32 {
+    // Falsy return → host falls back to its tarball `getFile` resolver,
+    // which already has every file we shipped under `widgets/` and `ui/`.
+    0
+}
+
+/// `webview.receive(plugin, buf, size)` — bytes from the UI iframe.
+/// We accept the simple `{set:[<u32 id>, <f64 value>]}` CBOR shape used by
+/// the auto-pan / vocal-* UIs (see widgets/cbor.mjs). Anything else is
+/// silently dropped — extending the protocol means adding parsers here.
+extern "C" fn webview_receive(plugin_ptr: u32, buf_ptr: u32, size: u32) -> u32 {
+    if size < 20 {
+        return 1;
+    }
+    let p = buf_ptr as *const u8;
+    unsafe {
+        // 0xa1 = map(1)
+        if *p != 0xa1 {
+            return 1;
+        }
+        // 0x63 "set"
+        if *p.add(1) != 0x63 || *p.add(2) != 0x73 || *p.add(3) != 0x65 || *p.add(4) != 0x74 {
+            return 1;
+        }
+        // 0x82 = array(2)
+        if *p.add(5) != 0x82 {
+            return 1;
+        }
+        // 0x1a = u32; then 4 big-endian bytes
+        if *p.add(6) != 0x1a {
+            return 1;
+        }
+        let id = u32::from_be_bytes([*p.add(7), *p.add(8), *p.add(9), *p.add(10)]);
+        // 0xfb = f64; then 8 big-endian bytes
+        if *p.add(11) != 0xfb {
+            return 1;
+        }
+        let mut vbytes = [0u8; 8];
+        for i in 0..8 {
+            vbytes[i] = *p.add(12 + i);
+        }
+        let value = f64::from_be_bytes(vbytes);
+
+        let data = read_plugin_data(plugin_ptr);
+        if let Some(f) = VTABLE.set_param {
+            f(data, id, value);
+        }
+    }
+    1
+}
+
+// ---------------------------------------------------------------------------
+// clap.params — count / get_info / get_value, plus no-op flush + text
+// conversions. The plugin's params are declared as `&'static [ParamDef]`
+// via `Plugin::params()`; the C-ABI shims read them straight out of DEF
+// without needing P-typing.
+// ---------------------------------------------------------------------------
+
+#[inline]
+unsafe fn param_def(idx: u32) -> Option<&'static ParamDef> {
+    if idx >= DEF.params_len || DEF.params_ptr.is_null() {
+        return None;
+    }
+    Some(&*DEF.params_ptr.add(idx as usize))
+}
+
+extern "C" fn params_count(_plugin_ptr: u32) -> u32 {
+    unsafe { DEF.params_len }
+}
+
+extern "C" fn params_get_info(_plugin_ptr: u32, index: u32, info_ptr: u32) -> u32 {
+    unsafe {
+        let Some(def) = param_def(index) else { return 0 };
+        // Zero the whole struct, then write fields. The struct is 1320
+        // bytes; the host allocated it inside our memory.
+        core::ptr::write_bytes(info_ptr as *mut u8, 0, offsets::param_info::SIZE);
+        write_u32(info_ptr + offsets::param_info::ID as u32, def.id);
+        write_u32(info_ptr + offsets::param_info::FLAGS as u32, def.flags);
+        write_str_into(
+            info_ptr + offsets::param_info::NAME as u32,
+            offsets::param_info::NAME_CAP,
+            def.name,
+        );
+        write_str_into(
+            info_ptr + offsets::param_info::MODULE as u32,
+            offsets::param_info::MODULE_CAP,
+            def.module,
+        );
+        write_f64(info_ptr + offsets::param_info::MIN_VALUE as u32, def.min);
+        write_f64(info_ptr + offsets::param_info::MAX_VALUE as u32, def.max);
+        write_f64(
+            info_ptr + offsets::param_info::DEFAULT_VALUE as u32,
+            def.default,
+        );
+    }
+    1
+}
+
+extern "C" fn params_get_value(plugin_ptr: u32, id: u32, out_ptr: u32) -> u32 {
+    let v = unsafe {
+        let data = read_plugin_data(plugin_ptr);
+        match VTABLE.get_param {
+            Some(f) => f(data, id),
+            None => 0.0,
+        }
+    };
+    unsafe { write_f64(out_ptr, v) };
+    1
+}
+
+extern "C" fn params_value_to_text(
+    _plugin_ptr: u32,
+    _id: u32,
+    _value: u64,
+    _buf_ptr: u32,
+    _cap: u32,
+) -> u32 {
+    // Host falls back to a default decimal formatter if we return false.
+    0
+}
+
+extern "C" fn params_text_to_value(
+    _plugin_ptr: u32,
+    _id: u32,
+    _text_ptr: u32,
+    _out_ptr: u32,
+) -> u32 {
+    0
+}
+
+extern "C" fn params_flush(
+    _plugin_ptr: u32,
+    _in_events_ptr: u32,
+    _out_events_ptr: u32,
+) {
+    // No-op for Stage A — UI param changes arrive through webview.receive,
+    // not the event queue. DAW-driven automation events come in Stage B.
+}
+
+extern "C" fn latency_get(plugin_ptr: u32) -> u32 {
+    unsafe {
+        let data = read_plugin_data(plugin_ptr);
+        match VTABLE.latency_samples {
+            Some(f) => f(data),
+            None => 0,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers used by the param-info writer.
+// ---------------------------------------------------------------------------
+
+#[inline]
+unsafe fn write_f64(addr: u32, value: f64) {
+    core::ptr::write_unaligned(addr as *mut f64, value);
+}
+
+/// Copy a NUL-terminated source slice into a fixed-capacity destination
+/// inside the plugin's memory, clamped to `cap - 1` so the host's null
+/// terminator survives. Source's trailing NUL is dropped if present.
+unsafe fn write_str_into(dst: u32, cap: usize, src: &[u8]) {
+    let src_len = src.iter().position(|&b| b == 0).unwrap_or(src.len());
+    let n = core::cmp::min(src_len, cap.saturating_sub(1));
+    core::ptr::copy_nonoverlapping(src.as_ptr(), dst as *mut u8, n);
+    *((dst + n as u32) as *mut u8) = 0;
+}
+
 // Silence "may be unused" warnings on non-wasm hosts.
 #[allow(dead_code)]
 fn _keep_alive() {
@@ -794,6 +1393,9 @@ fn _keep_alive() {
     let _ = addr_of_mut!(DESCRIPTOR);
     let _ = addr_of_mut!(AUDIO_PORTS_EXT);
     let _ = addr_of_mut!(NOTE_PORTS_EXT);
+    let _ = addr_of_mut!(WEBVIEW_EXT);
+    let _ = addr_of_mut!(PARAMS_EXT);
+    let _ = addr_of_mut!(LATENCY_EXT);
     let _ = addr_of_mut!(FEATURES_TABLE);
     let _ = addr_of_mut!(DEF);
     let _ = addr_of_mut!(VTABLE);

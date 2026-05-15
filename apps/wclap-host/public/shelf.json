@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "generatedAt": "2026-05-15T07:20:31.573Z",
+  "generatedAt": "2026-05-15T12:06:35.922Z",
   "items": [
     {
       "id": "com.plinken.auto-pan",
@@ -81,7 +81,17 @@
         "mastering"
       ],
       "homepage": "https://plinken.org",
-      "has_ui": false,
+      "has_ui": true,
+      "ui": {
+        "compact_size": {
+          "width": 360,
+          "height": 56
+        },
+        "expanded_size": {
+          "width": 480,
+          "height": 240
+        }
+      },
       "plugins": [
         {
           "id": "com.plinken.vocal-limiter",
@@ -91,7 +101,7 @@
             "limiter",
             "mastering"
           ],
-          "has_ui": false
+          "has_ui": true
         }
       ]
     },

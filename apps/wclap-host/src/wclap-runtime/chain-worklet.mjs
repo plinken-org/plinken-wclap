@@ -1,0 +1,423 @@
+// Plinken vocal-host chain worklet.
+//
+// ONE AudioWorkletNode owns the Rust host wasm AND every plugin wasm in the
+// chain. The audio loop iterates loaded slots in order inside a single
+// quantum, eliminating the per-AudioWorkletNode render-quantum cost
+// (~2.67 ms @ 48 kHz × N plugins) that V1 paid for one-AWN-per-plugin.
+//
+// See apps/vocal-host/DESIGN.md for the full architecture.
+
+import { getHost, startHost } from '@webclap/wclap-host-js';
+import { hostImports } from './host-imports.mjs';
+import CBOR from './cbor.mjs';
+
+export default null;
+if (!globalThis.AudioWorkletProcessor) {
+  globalThis.AudioWorkletProcessor = globalThis.registerProcessor = function () {};
+}
+
+const NUM_SLOTS = 5;
+
+class ChainProcessor extends AudioWorkletProcessor {
+  /** @type {any} */ host;
+  /** @type {any} */ hostApi;
+  /** @type {Array<SlotState|null>} */ slots = new Array(NUM_SLOTS).fill(null);
+  /** Lookup table: pluginPtr → slot index, for host-callback routing. */
+  pluginToSlot = new Map();
+  hostedBytes = 0;
+  hostReady = false;
+  hostReadyResolve;
+  hostReadyPromise;
+  fatalError = null;
+  scratchA = null;
+  scratchB = null;
+
+  constructor(options) {
+    super();
+    this.maxFrames = 128;
+    this.hostReadyPromise = new Promise((r) => (this.hostReadyResolve = r));
+
+    this.port.onmessageerror = (e) => {
+      // MessageEvent is opaque on messageerror — the failed payload isn't
+      // deserialized so e.data is null. Dump what little we can and post
+      // a structured 'msgerror' the main side can show in the UI.
+      this.port.postMessage({
+        kind: 'msgerror',
+        info: {
+          type: e?.type,
+          origin: e?.origin ?? '',
+          lastEventId: e?.lastEventId ?? '',
+          ports: (e?.ports ?? []).length
+        }
+      });
+    };
+    this.port.onmessage = (e) => {
+      // Echo every incoming message so the main side can confirm delivery.
+      this.port.postMessage({
+        kind: 'dbg',
+        msg: '[chain] onmessage received kind=' + (e?.data?.kind ?? typeof e?.data)
+      });
+      if (e?.data?.kind === 'ping') {
+        this.port.postMessage({ kind: 'pong', from: 'worklet' });
+        return;
+      }
+      this.onMessage(e.data);
+    };
+    // Explicit, structured "I'm alive" envelope (not a dbg string) so it's
+    // easy to spot in the console even with filters on.
+    this.port.postMessage({ kind: 'worklet-alive', at: 'constructor' });
+
+    const opts = options?.processorOptions || {};
+    if (opts.host) this.startHost(opts.host).catch((e) => this.fail(e));
+  }
+
+  // Debug helper — console.log inside an AudioWorklet doesn't reliably
+  // reach the page console (especially while the AudioContext is
+  // suspended), so we ship debug strings back over the MessagePort and
+  // log them on the main thread instead.
+  dbg(...args) {
+    let str = '';
+    for (const a of args) {
+      if (typeof a === 'string') str += (str ? ' ' : '') + a;
+      else {
+        try { str += (str ? ' ' : '') + JSON.stringify(a); }
+        catch { str += (str ? ' ' : '') + String(a); }
+      }
+    }
+    this.port.postMessage({ kind: 'dbg', msg: str });
+  }
+
+  async startHost(hostInit) {
+    const imports = hostImports();
+    Object.assign(imports.env, {
+      webviewSend: (pluginPtr, ptr, length) => {
+        const slot = this.lookupSlotByPlugin(pluginPtr);
+        if (!slot) return;
+        const bytes = new Uint8Array(slot.memory.buffer, ptr, length).slice();
+        this.port.postMessage(
+          { kind: 'webview', slot: slot.index, buf: bytes.buffer },
+          [bytes.buffer]
+        );
+      },
+      eventsOutTryPush: (_pluginPtr, _ptr, _length) => {
+        // Not used in the vocal chain; events are not routed between plugins.
+      },
+      stateMarkDirty: (pluginPtr) => {
+        const slot = this.lookupSlotByPlugin(pluginPtr);
+        if (slot) this.port.postMessage({ kind: 'state-dirty', slot: slot.index });
+      },
+      paramsRescan: (pluginPtr, flags) => {
+        const slot = this.lookupSlotByPlugin(pluginPtr);
+        if (slot) {
+          this.port.postMessage({ kind: 'params-rescan', slot: slot.index, flags });
+        }
+      },
+      log: (pluginPtr, severity, msgPtr, length) => {
+        const slot = this.lookupSlotByPlugin(pluginPtr);
+        if (!slot) return;
+        const bytes = new Uint8Array(slot.memory.buffer, msgPtr, length);
+        let str = '';
+        for (let i = 0; i < length; ++i) str += String.fromCharCode(bytes[i]);
+        if (severity >= 2) console.error(`[plugin@${slot.index}]`, str);
+        else console.log(`[plugin@${slot.index}]`, str);
+      }
+    });
+
+    this.host = await startHost(hostInit, imports);
+    this.hostApi = this.host.hostInstance.exports;
+    this.hostedBytes = this.hostApi.createBytes();
+    this.hostReady = true;
+    this.hostReadyResolve();
+    this.port.postMessage({ kind: 'host-ready' });
+  }
+
+  lookupSlotByPlugin(pluginPtr) {
+    const idx = this.pluginToSlot.get(pluginPtr);
+    return idx == null ? null : this.slots[idx];
+  }
+
+  async onMessage(data) {
+    if (!data || typeof data !== 'object') return;
+    this.dbg('[chain] onMessage routing', { kind: data.kind, slot: data.slot });
+    try {
+      switch (data.kind) {
+        case 'load':
+          await this.handleLoad(data);
+          break;
+        case 'unload':
+          await this.handleUnload(data);
+          break;
+        case 'set-param':
+          this.handleSetParam(data);
+          break;
+        case 'set-bypass':
+          this.handleSetBypass(data);
+          break;
+        case 'plugin-msg':
+          this.handlePluginMessage(data);
+          break;
+        case 'get-params':
+          await this.handleGetParams(data);
+          break;
+        default:
+          console.warn('[chain] unknown message kind:', data.kind);
+      }
+    } catch (e) {
+      console.error('[chain] message handler error:', e);
+      this.port.postMessage({
+        kind: 'error',
+        slot: data?.slot ?? null,
+        error: String(e && e.message ? e.message : e)
+      });
+    }
+  }
+
+  async handleLoad({ slot, wclap, pluginId }) {
+    this.dbg('[chain] handleLoad start', { slot, pluginId, hasWclap: !!wclap });
+    if (!this.hostReady) await this.hostReadyPromise;
+    if (slot < 0 || slot >= NUM_SLOTS) throw new Error('slot out of range: ' + slot);
+    if (this.slots[slot]) await this.unloadSlot(slot);
+
+    // Recompile the wasm module on this side — main stripped `wclap.module`
+    // because Chromium refuses to transfer WebAssembly.Module over the
+    // AudioWorklet port. The raw bytes live in `wclap.files[<pluginPath>/module.wasm]`.
+    if (!wclap.module) {
+      const wasmPath = `${wclap.pluginPath}/module.wasm`;
+      const wasmBytes = wclap.files?.[wasmPath];
+      if (!wasmBytes) throw new Error('handleLoad: wasm bytes missing at ' + wasmPath);
+      this.dbg('[chain] compiling wasm in worklet, bytes =', wasmBytes.byteLength);
+      wclap.module = await WebAssembly.compile(wasmBytes);
+      this.dbg('[chain] compile done');
+    }
+
+    const wclapInstance = await this.host.startWclap(wclap, (_host, _threadData) => {
+      // No worker threads in the vocal chain — plugins run single-threaded.
+      return false;
+    });
+    this.dbg('[chain] startWclap done, ptr =', wclapInstance.ptr);
+    const hostedPtr = this.hostApi.makeHosted(wclapInstance.ptr);
+    if (!hostedPtr) throw new Error('makeHosted failed');
+
+    // Pick the right plugin from the bundle.
+    let resolvedId = pluginId;
+    if (!resolvedId) {
+      const info = this.decodeCbor(this.hostApi.getInfo(hostedPtr, this.hostedBytes));
+      resolvedId = info.plugins[0]?.id;
+      if (!resolvedId) throw new Error('bundle has no plugins');
+    }
+    this.dbg('[chain] resolved plugin id =', resolvedId);
+
+    // createPlugin takes the plugin id as a wasm-side string. The host owns
+    // a scratch "bytes" pointer we re-use to ship the bytes across.
+    const idBytes = new TextEncoder().encode(resolvedId);
+    this.writeHostBytes(idBytes);
+    const pluginPtr = this.hostApi.createPlugin(hostedPtr, this.hostedBytes);
+    if (!pluginPtr) throw new Error('createPlugin failed for ' + resolvedId);
+    this.dbg('[chain] createPlugin done, pluginPtr =', pluginPtr);
+
+    const audioPointers = this.decodeCbor(
+      this.hostApi.pluginStart(
+        pluginPtr,
+        globalThis.sampleRate,
+        0,
+        this.maxFrames,
+        this.hostedBytes
+      )
+    );
+    if (!audioPointers) throw new Error('pluginStart failed');
+    this.dbg('[chain] pluginStart done, audioPointers =', audioPointers);
+
+    const pluginInfo = this.decodeCbor(
+      this.hostApi.pluginGetInfo(pluginPtr, this.hostedBytes)
+    );
+
+    const slotState = {
+      index: slot,
+      hostedPtr,
+      pluginPtr,
+      pluginId: resolvedId,
+      memory: wclapInstance.memory,
+      audioPointers,
+      bypass: false,
+      info: pluginInfo
+    };
+    this.slots[slot] = slotState;
+    this.pluginToSlot.set(pluginPtr, slot);
+
+    // Run one main-thread tick so the plugin can finish setup.
+    this.hostApi.pluginMainThread(pluginPtr);
+
+    this.dbg('[chain] posting loaded for slot', slot);
+    this.port.postMessage({
+      kind: 'loaded',
+      slot,
+      pluginId: resolvedId,
+      info: pluginInfo
+    });
+  }
+
+  async handleUnload({ slot }) {
+    await this.unloadSlot(slot);
+    this.port.postMessage({ kind: 'unloaded', slot });
+  }
+
+  async unloadSlot(slot) {
+    const s = this.slots[slot];
+    if (!s) return;
+    this.slots[slot] = null;
+    this.pluginToSlot.delete(s.pluginPtr);
+    try {
+      this.hostApi.destroyPlugin(s.pluginPtr);
+    } catch (e) {
+      console.warn('[chain] destroyPlugin threw:', e);
+    }
+    try {
+      this.hostApi.removeHosted(s.hostedPtr);
+    } catch (e) {
+      console.warn('[chain] removeHosted threw:', e);
+    }
+  }
+
+  handleSetParam({ slot, paramId, value }) {
+    const s = this.slots[slot];
+    if (!s) return;
+    this.hostApi.pluginSetParam(s.pluginPtr, paramId, value);
+    this.hostApi.pluginParamsFlush(s.pluginPtr);
+  }
+
+  handleSetBypass({ slot, bypass }) {
+    const s = this.slots[slot];
+    if (!s) return;
+    s.bypass = !!bypass;
+  }
+
+  handlePluginMessage({ slot, buf }) {
+    const s = this.slots[slot];
+    if (!s) return;
+    const bytes = new Uint8Array(buf);
+    this.writeHostBytes(bytes);
+    this.hostApi.pluginMessage(s.pluginPtr, this.hostedBytes);
+  }
+
+  async handleGetParams({ slot, requestId }) {
+    const s = this.slots[slot];
+    if (!s) {
+      this.port.postMessage({ kind: 'params', slot, requestId, params: [] });
+      return;
+    }
+    const params = this.decodeCbor(
+      this.hostApi.pluginGetParams(s.pluginPtr, this.hostedBytes)
+    );
+    for (const p of params) {
+      p.value = this.decodeCbor(
+        this.hostApi.pluginGetParam(s.pluginPtr, p.id, this.hostedBytes)
+      );
+    }
+    this.port.postMessage({ kind: 'params', slot, requestId, params });
+  }
+
+  decodeCbor() {
+    const ptr = this.hostApi.getBytesData(this.hostedBytes);
+    const len = this.hostApi.getBytesLength(this.hostedBytes);
+    const bytes = new Uint8Array(this.host.hostMemory.buffer).slice(ptr, ptr + len);
+    return CBOR.decode(bytes);
+  }
+
+  writeHostBytes(bytes) {
+    const ptr = this.hostApi.resizeBytes(this.hostedBytes, bytes.length);
+    const view = new Uint8Array(this.host.hostMemory.buffer).subarray(
+      ptr,
+      ptr + bytes.length
+    );
+    view.set(bytes);
+  }
+
+  fail(e) {
+    console.error('[chain] fatal:', e);
+    this.fatalError = e;
+    this.port.postMessage({ kind: 'crashed', error: String(e?.message || e) });
+  }
+
+  process(inputs, outputs) {
+    if (this.fatalError || !this.hostReady) return true;
+
+    const out = outputs[0];
+    const inp = inputs[0];
+    if (!out || out.length === 0) return true;
+    const blockLength = out[0].length;
+    const channels = out.length;
+
+    // Initialize scratch ping-pong buffers (Float32Array per channel).
+    if (!this.scratchA || this.scratchA[0].length !== blockLength) {
+      this.scratchA = new Array(channels)
+        .fill(null)
+        .map(() => new Float32Array(blockLength));
+      this.scratchB = new Array(channels)
+        .fill(null)
+        .map(() => new Float32Array(blockLength));
+    }
+
+    // Seed scratchA with the JS input (or silence).
+    for (let c = 0; c < channels; c++) {
+      const src = inp && inp[c % (inp.length || 1)];
+      if (src && src.length === blockLength) {
+        this.scratchA[c].set(src);
+      } else {
+        this.scratchA[c].fill(0);
+      }
+    }
+
+    let current = this.scratchA;
+    let next = this.scratchB;
+
+    for (let i = 0; i < NUM_SLOTS; i++) {
+      const s = this.slots[i];
+      if (!s || s.bypass) continue;
+
+      // Copy `current` channels into this plugin's input ports/channels.
+      const inputs0 = s.audioPointers.inputs[0];
+      if (inputs0) {
+        for (let c = 0; c < inputs0.length; c++) {
+          const dst = new Float32Array(s.memory.buffer, inputs0[c], blockLength);
+          dst.set(current[c % current.length]);
+        }
+      }
+
+      let status;
+      try {
+        status = this.hostApi.pluginProcess(s.pluginPtr, blockLength);
+        this.hostApi.pluginMainThread(s.pluginPtr);
+      } catch (e) {
+        this.fail(e);
+        return true;
+      }
+      if (status === 0 /* CLAP_PROCESS_ERROR */) {
+        console.error('[chain] plugin process error in slot', i);
+        // Pass-through this slot on error.
+        continue;
+      }
+
+      // Pull this plugin's outputs into `next`.
+      const outputs0 = s.audioPointers.outputs[0];
+      if (outputs0 && outputs0.length) {
+        for (let c = 0; c < channels; c++) {
+          const ptr = outputs0[c % outputs0.length];
+          const src = new Float32Array(s.memory.buffer, ptr, blockLength);
+          next[c].set(src);
+        }
+        const tmp = current;
+        current = next;
+        next = tmp;
+      }
+      // else: plugin has no outputs (rare), leave `current` as-is.
+    }
+
+    // Write `current` to JS output.
+    for (let c = 0; c < channels; c++) {
+      out[c].set(current[c]);
+    }
+    return true;
+  }
+}
+
+registerProcessor('vocal-chain', ChainProcessor);

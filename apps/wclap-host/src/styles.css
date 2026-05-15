@@ -123,6 +123,171 @@ h1 {
   margin: 0;
 }
 
+.sourceSection {
+  margin: 0 0 1.25rem;
+}
+.sourceRow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+/* Pill-style 2-position toggle with a sliding thumb. The active half's
+ * text sits on the thumb (accent background, dark text); the inactive
+ * half sits flat on the dark pill background. */
+.sourceToggle {
+  --pill-w: 120px;
+  --pill-h: 28px;
+  position: relative;
+  width: var(--pill-w);
+  height: var(--pill-h);
+  border: 1px solid var(--border-soft);
+  border-radius: calc(var(--pill-h) / 2);
+  background: var(--bg-deep);
+  cursor: pointer;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  overflow: hidden;
+}
+.sourceToggleLabel {
+  position: relative;
+  z-index: 1;
+  color: var(--text-dim);
+  transition: color 0.12s;
+  pointer-events: none;
+}
+.sourceToggleThumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  height: calc(var(--pill-h) - 4px);
+  border-radius: calc(var(--pill-h) / 2 - 2px);
+  background: var(--accent);
+  transition: transform 0.16s ease;
+  pointer-events: none;
+}
+.sourceToggle[data-source="tone"] .sourceToggleLabelTone {
+  color: var(--bg);
+  font-weight: 600;
+}
+.sourceToggle[data-source="mic"] .sourceToggleLabelMic {
+  color: var(--bg);
+  font-weight: 600;
+}
+.sourceToggle[data-source="mic"] .sourceToggleThumb {
+  transform: translateX(100%);
+}
+.sourceToggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.micDeviceWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.micDeviceWrap[hidden] {
+  display: none;
+}
+.micDeviceLabel {
+  font-family: var(--font-display);
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.micDevice {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  background: var(--bg-deep);
+  color: var(--text);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  max-width: 220px;
+}
+
+.micChannelWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+.micChannelWrap[hidden] {
+  display: none;
+}
+.micChannelLabel {
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 0 6px;
+}
+.micChannelOpt {
+  font-family: var(--font-display);
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: transparent;
+  color: var(--text-dim);
+  border: 0;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.micChannelOpt:hover:not(.micChannelOptActive) {
+  color: var(--text-muted);
+}
+.micChannelOptActive {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.sourceControls {
+  display: inline-flex;
+  gap: 8px;
+}
+.sourceControls button {
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  background: var(--accent);
+  color: var(--bg);
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 16px;
+  cursor: pointer;
+  transition: background 0.12s, opacity 0.12s;
+}
+.sourceControls button:hover:not(:disabled) {
+  background: var(--accent-deep);
+}
+.sourceControls button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.sourceStatus {
+  margin-left: auto;
+}
+.sourceStatusText {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
 .rackSection {
   margin-bottom: 0.5rem;
 }
@@ -253,6 +418,17 @@ h1 {
   border-color: var(--accent-warn);
   color: var(--accent-warn);
   background: rgba(217, 122, 91, 0.08);
+}
+.slotLatency {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 0.25rem;
+  white-space: nowrap;
 }
 .slotStrip {
   font: inherit;

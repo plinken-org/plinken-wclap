@@ -229,11 +229,14 @@ class AutoPan extends Clap.Plugin {
     return true;
   }
 
-  // Override so `clap.webview/3` is advertised. Other extension IDs fall
-  // through to the parent log-and-return-zero behaviour.
+  // Override so `clap.webview/3` and `clap.latency` are advertised. Other
+  // extension IDs fall through to the parent log-and-return-zero behaviour.
   pluginGetExtensionUtf8(extIdPtr: usize): usize {
     if (Clap.equalCStr(extIdPtr, Clap.Utf8.EXT_WEBVIEW)) {
       return changetype<usize>(corePluginWebview);
+    }
+    if (Clap.equalCStr(extIdPtr, Clap.Utf8.EXT_LATENCY)) {
+      return changetype<usize>(corePluginLatency);
     }
     return super.pluginGetExtensionUtf8(extIdPtr);
   }
@@ -330,6 +333,13 @@ const corePluginWebview = new Clap.clap_plugin_webview();
 corePluginWebview._get_uri = Clap.fnPtr(webviewGetUri);
 corePluginWebview._get_resource = Clap.fnPtr(webviewGetResource);
 corePluginWebview._receive = Clap.fnPtr(webviewReceive);
+
+// Feedback-mode auto-panner: no lookahead, no internal delay → 0 samples.
+function latencyGet(_plugin: Clap.clap_plugin): u32 {
+  return 0;
+}
+const corePluginLatency = new Clap.clap_plugin_latency();
+corePluginLatency._get = Clap.fnPtr(latencyGet);
 
 // --- tiny CBOR helpers ---------------------------------------------------
 //

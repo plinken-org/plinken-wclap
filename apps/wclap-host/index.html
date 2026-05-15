@@ -21,10 +21,8 @@
         <div class="badge">WCLAP HOST · POC</div>
         <h1>Load a WCLAP plugin.</h1>
         <p class="lede">
-          Drop a <code>.wclap</code> bundle below. The page will compile it,
-          start an <code>AudioWorklet</code>, and pipe a 440&nbsp;Hz stereo test
-          tone through the plugin so you can hear it work end&#8209;to&#8209;end
-          in the browser. Built on
+          Drop a <code>.wclap</code> bundle below. Pick a source (tone or mic),
+          press Start, and hear the plugin work end&#8209;to&#8209;end. Built on
           <a
             href="https://github.com/WebCLAP/wclap-host-js"
             target="_blank"
@@ -34,36 +32,63 @@
         </p>
       </header>
 
-      <section class="rackSection" aria-label="FX rack">
+      <section class="sourceSection" aria-label="Audio source">
+        <div class="sectionHead">
+          <h2 class="sectionTitle">Source</h2>
+          <p class="sectionSub">
+            Pick a 440&nbsp;Hz test tone or your microphone, then press Start.
+            Signal flows down through the FX chain below.
+          </p>
+        </div>
+        <div class="sourceRow">
+          <button
+            id="sourceToggle"
+            type="button"
+            class="sourceToggle"
+            role="switch"
+            aria-checked="false"
+            aria-label="Audio source: Tone or Mic"
+            data-source="tone"
+          >
+            <span class="sourceToggleLabel sourceToggleLabelTone">Tone</span>
+            <span class="sourceToggleLabel sourceToggleLabelMic">Mic</span>
+            <span class="sourceToggleThumb" aria-hidden="true"></span>
+          </button>
+          <label id="micDeviceWrap" class="micDeviceWrap" hidden>
+            <span class="micDeviceLabel">Device</span>
+            <select id="micDevice" class="micDevice"></select>
+          </label>
+          <div
+            id="micChannelWrap"
+            class="micChannelWrap"
+            role="radiogroup"
+            aria-label="Mic channel mode"
+            hidden
+          >
+            <span class="micChannelLabel">Ch</span>
+            <button type="button" class="micChannelOpt micChannelOptActive" data-mode="L" role="radio" aria-checked="true">L</button>
+            <button type="button" class="micChannelOpt" data-mode="R" role="radio" aria-checked="false">R</button>
+            <button type="button" class="micChannelOpt" data-mode="MONO" role="radio" aria-checked="false">Mono</button>
+            <button type="button" class="micChannelOpt" data-mode="STEREO" role="radio" aria-checked="false">Stereo</button>
+          </div>
+          <div class="sourceControls">
+            <button id="playBtn" type="button" disabled>▶ Start</button>
+            <button id="stopBtn" type="button" disabled>■ Stop</button>
+          </div>
+          <div class="sourceStatus">
+            <span id="sourceStatus" class="sourceStatusText">Tone · 440 Hz</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="rackSection" aria-label="FX chain">
         <div class="sectionHead">
           <h2 class="sectionTitle">FX Chain</h2>
           <p class="sectionSub">
             Drop a <code>.wclap</code> file — or drag a shelf chip — onto any
-            slot. Slots run top → bottom. Empty slots pass through.
+            slot. Slots run top → bottom. Empty slots pass through. All
+            plugins run inside one worklet for minimum latency.
           </p>
-        </div>
-
-        <div id="midiBar" class="midiBar" aria-live="polite">
-          <span class="midiBarLabel">MIDI in</span>
-          <span id="midiLed" class="midiLed" aria-hidden="true"></span>
-          <span id="midiStatus" class="midiStatus">no device</span>
-          <button
-            id="midiRescan"
-            type="button"
-            class="midiPanic"
-            title="Re-enumerate connected MIDI inputs"
-          >
-            rescan
-          </button>
-          <button
-            id="midiPanic"
-            type="button"
-            class="midiPanic"
-            title="Send Note Off to every key (panic)"
-          >
-            all notes off
-          </button>
-          <span id="midiNotes" class="midiNotes"></span>
         </div>
 
         <div id="rack" class="rack"></div>
@@ -71,8 +96,7 @@
         <div class="sectionHead sectionHeadShelf">
           <h2 class="sectionTitle">Shelf</h2>
           <p class="sectionSub">
-            Drag a chip onto a slot, or click to drop into the first empty
-            slot.
+            Drag a chip onto a slot, or click to drop into the first empty slot.
           </p>
         </div>
 
@@ -97,9 +121,9 @@
       <section class="status" aria-live="polite">
         <dl class="statusGrid">
           <dt>Status</dt>
-          <dd id="statusLabel">Idle — waiting for a plugin.</dd>
+          <dd id="statusLabel">Idle — waiting.</dd>
 
-          <dt>Plugin</dt>
+          <dt>Chain</dt>
           <dd id="pluginLabel">—</dd>
 
           <dt>Sample rate</dt>
@@ -111,11 +135,6 @@
           <dt>Audio state</dt>
           <dd id="audioStateLabel">—</dd>
         </dl>
-
-        <div class="controls">
-          <button id="playBtn" type="button" disabled>▶ Play test tone</button>
-          <button id="stopBtn" type="button" disabled>■ Stop</button>
-        </div>
 
         <div class="meters" aria-hidden="true">
           <div class="meter">
@@ -147,6 +166,15 @@
 
         <pre id="errorBox" class="error" hidden></pre>
       </section>
+
+      <!-- Hidden (no MIDI yet) but required by ui.ts type contract. -->
+      <div id="midiBar" hidden>
+        <span id="midiLed"></span>
+        <span id="midiStatus"></span>
+        <span id="midiNotes"></span>
+        <button id="midiPanic" type="button"></button>
+        <button id="midiRescan" type="button"></button>
+      </div>
 
       <footer class="footer">
         <a href="https://plinken.org">plinken.org</a>

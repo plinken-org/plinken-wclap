@@ -21,6 +21,7 @@ static PLUGIN_DEF: PluginDef = PluginDef {
     audio_inputs: 0,
     audio_outputs: 1,
     note_inputs: 1,
+    ui_path: None,
 };
 
 struct Synome;
