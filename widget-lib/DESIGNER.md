@@ -52,9 +52,9 @@ Three panels, single SvelteKit route:
   viewBox>` so resizing is free. Click selects (8 resize handles +
   outline); drag body to move, drag handle to resize. Esc clears,
   Delete removes.
-- **Properties** — bound to selection. Fields: `endpoint` (free-form
-  text), `x` / `y` / `w` / `h` (numeric, two-way bound to the
-  transform), plus widget-specific display options.
+- **Properties** — bound to selection. Fields: see the attribute
+  table below; values write straight back to attributes on the
+  selected DOM node.
 
 ## Widget composition
 
@@ -83,6 +83,59 @@ layer autocomplete + type-filtering + stale-binding warnings on top.
 The on-disk file format does not change — V2 is intelligence, not a
 schema break.
 
+## Widget attributes
+
+Three groups of attributes per widget:
+
+**Binding (required):**
+
+| Attr       | Value                                                  |
+|------------|--------------------------------------------------------|
+| `endpoint` | patch parameter name (free-form string in V1)          |
+
+**Cmajor-parity (optional, mirror patch annotations):**
+
+| Attr   | Cmajor annotation | Notes                                       |
+|--------|-------------------|---------------------------------------------|
+| `min`  | `min:`            | numeric lower bound                         |
+| `max`  | `max:`            | numeric upper bound                         |
+| `init` | `init:`           | default value                               |
+| `step` | `step:`           | quantisation step                           |
+| `unit` | `unit:`           | display label (`"dB"`, `"Hz"`, `"ms"`, …)  |
+| `text` | `text:`           | pipe-separated enum values for switch/dropdown (`"Sine\|Saw\|Square\|Noise"`) |
+
+**UI-only (no patch analog):**
+
+| Attr      | Value                                                       |
+|-----------|-------------------------------------------------------------|
+| `scaling` | `"log"` \| `"lin"` (default `"lin"`) — knob/fader response curve |
+| `format`  | display override, e.g. `"{v:.1f} kHz"` when patch says Hz   |
+| `label`   | text shown by the widget (defaults to endpoint name)        |
+| `x`, `y`  | pixel position on the canvas                                |
+| `w`, `h`  | pixel size                                                  |
+
+**Conflict rule:** at runtime, `meta` from the patch wins. The
+Cmajor-parity attributes fill gaps only when the patch doesn't
+supply the corresponding field. That keeps the patch authoritative
+and the HTML in sync without edits when annotations change. The
+UI-only attributes are always honoured — they have no patch source
+to compete with.
+
+**Canonical example:**
+
+```html
+<plinken-knob endpoint="cutoff"
+              min="20" max="20000" init="1000" step="1"
+              unit="Hz" scaling="log"
+              x="40" y="60" w="56" h="56" label="CUTOFF"/>
+```
+
+During design (no patch loaded): the mock conn builds `meta` from
+these attributes — widget renders with `0 – 20 kHz` range, log
+response, Hz readout. After the plugin wires up against a patch
+that declares `cutoff [[ min: 20, max: 20000, init: 1000, unit:
+"Hz" ]]`: patch `meta` supersedes, nothing visible changes.
+
 ## Mock connection
 
 The designer ships a `MockConnection` implementing the methods
@@ -98,7 +151,9 @@ sendParameterGestureEnd(ep)
 sendEventOrValue(ep, value)
 ```
 
-The synthesised `parameters` array uses per-kind defaults:
+The synthesised `parameters` array reads each placed widget's
+Cmajor-parity attributes first; anything missing falls back to
+per-kind defaults:
 
 | Widget   | min  | max  | init | unit | step |
 |----------|------|------|------|------|------|
@@ -130,9 +185,13 @@ Single `index.html`, written to `plugins/<name>/ui/index.html`:
 
 <div class="plinken-ui" data-w="480" data-h="320">
   <plinken-background skin="organ"/>
-  <plinken-knob   endpoint="cutoff" x="40"  y="60"  w="56" h="56" label="CUTOFF"/>
-  <plinken-fader  endpoint="vol"    x="120" y="40"  w="20" h="200"/>
-  <plinken-toggle endpoint="bypass" x="200" y="60"  w="40" h="20"/>
+  <plinken-knob   endpoint="cutoff" min="20" max="20000" init="1000" step="1"
+                  unit="Hz" scaling="log"
+                  x="40" y="60" w="56" h="56" label="CUTOFF"/>
+  <plinken-fader  endpoint="vol"    min="-60" max="0" init="-12"
+                  unit="dB"
+                  x="120" y="40" w="20" h="200" label="VOL"/>
+  <plinken-toggle endpoint="bypass" x="200" y="60" w="40" h="20" label="BYPASS"/>
 </div>
 
 <script type="module">
@@ -172,11 +231,13 @@ Smallest spike that proves the pipeline end-to-end:
 
 1. `widget-lib/widget-base.mjs` (✓ already merged).
 2. One concrete widget (`plinken-knob`) extending `PlinkenWidget`,
-   rendering an SVG.
+   rendering an SVG, honouring `min`/`max`/`init`/`unit`/`scaling`
+   attributes as patch-meta fallbacks.
 3. `apps/site/src/routes/designer/+page.svelte` — palette with one
-   entry, canvas, drag-place-resize, property panel with `endpoint`
-   field.
-4. `MockConnection` in the designer module.
+   entry, canvas, drag-place-resize, property panel writing back to
+   the attribute set.
+4. `MockConnection` in the designer module, reading widgets'
+   attributes to synthesise `meta`.
 5. Save → download `index.html`; verify the file loads in a plain
    browser tab with a mock conn and the knob renders + animates.
 6. Add remaining widgets one at a time as they're authored.
