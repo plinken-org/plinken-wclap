@@ -10,9 +10,53 @@ auto-panner, …) build on this library.
 
 ## Base class
 
-`widget-base.mjs` exports `PlinkenWidget`. Subclass it, override
-`onMeta(meta)` and `onValue(v)`, and call `write(value, gesture)` on
-user input:
+`widget-base.mjs` exports `PlinkenWidget`:
+
+```js
+export class PlinkenWidget extends HTMLElement {
+  #conn = null;
+  #ep = null;
+  #listener = null;
+
+  setConnection(conn) {
+    this.#conn = conn;
+    this.#ep = this.getAttribute('endpoint');
+    this.#mount();
+  }
+
+  async #mount() {
+    // Pull annotations once — min/max/init/unit/step/text all come from the patch
+    const status = await this.#conn.requestStatusUpdate();
+    const meta = status.parameters.find(p => p.endpointID === this.#ep);
+    this.onMeta(meta);
+
+    // Subscribe to live changes
+    this.#listener = (v) => this.onValue(v);
+    this.#conn.addParameterListener(this.#ep, this.#listener);
+
+    // Pull current value
+    this.#conn.requestParameterValue(this.#ep);
+  }
+
+  disconnectedCallback() {
+    if (this.#listener) this.#conn?.removeParameterListener(this.#ep, this.#listener);
+  }
+
+  // Subclasses override these:
+  onMeta(meta) {}     // got annotations — render initial state
+  onValue(v) {}       // got new value — update transform/opacity/text
+
+  // Helper for UI → DSP writes with gesture grouping
+  write(value, gesture = false) {
+    if (gesture) this.#conn.sendParameterGestureStart(this.#ep);
+    this.#conn.sendEventOrValue(this.#ep, value);
+    if (gesture) this.#conn.sendParameterGestureEnd(this.#ep);
+  }
+}
+```
+
+Subclass it, override `onMeta(meta)` and `onValue(v)`, and call
+`write(value, gesture)` on user input:
 
 ```js
 import { PlinkenWidget } from '../widget-lib/widget-base.mjs';
