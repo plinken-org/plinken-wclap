@@ -8,6 +8,30 @@ Distinct from the imperative `widgets/` directory at the repo root,
 which stays in place for `vocal-limiter`. New plugin UIs (organ, piano,
 auto-panner, …) build on this library.
 
+## Package contents
+
+| Path                            | Purpose                                       |
+|---------------------------------|-----------------------------------------------|
+| `widget-base.mjs`               | `PlinkenWidget` base class (below)            |
+| `widget-lib.css`                | `@font-face` + `:root` theme tokens           |
+| `fonts/*.woff2`                 | Bundled Inter + JetBrains Mono Latin subsets (OFL 1.1) |
+| `README.md` (this file)         | Overview + base class + planned widget list   |
+| `DESIGNER.md`                   | `/designer` route spec — layout tool, attribute schema, mock conn |
+| `CATALOGUE.md`                  | `/widgets` route spec + theme token contract  |
+| `AUTHORING.md`                  | Conventions for writing a new widget          |
+
+Plugin UIs include the library by linking the stylesheet and importing
+widgets directly:
+
+```html
+<link rel="stylesheet" href="../widget-lib/widget-lib.css">
+<script type="module" src="../widget-lib/knob.mjs"></script>
+```
+
+The relative `../widget-lib/` path resolves because `scripts/bundle-wclap.mjs`
+ships `widget-lib/` into every plugin tarball alongside `ui/` (follow-up
+work — see `DESIGNER.md` § Bundler integration).
+
 ## Base class
 
 `widget-base.mjs` exports `PlinkenWidget`:

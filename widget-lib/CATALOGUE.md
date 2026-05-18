@@ -89,9 +89,12 @@ names; hardcoded values fail the catalogue's theme-switcher test
 | `--plk-radius`       | corner radius for boxed widgets              |
 | `--plk-thumb-size`   | fader / knob handle dimensions               |
 
-Default theme lives at `:root`. Alternate themes are blocks scoped
-to `[data-theme="..."]` on `<body>` (or the catalogue page's root
-element), setting the same properties.
+Default theme lives at `:root` in `widget-lib/widget-lib.css` (which
+also declares the `@font-face` blocks for the bundled
+`JetBrains Mono` and `Inter` woff2 files under `widget-lib/fonts/`).
+Alternate themes are blocks scoped to `[data-theme="..."]` on
+`<body>` (or the catalogue page's root element), setting the same
+properties.
 
 ```css
 :root {

@@ -125,16 +125,31 @@ rather than one-offing.
 
 ## Fonts
 
-Two tokens, both system-only — no webfont loading from the widget
-library itself (keeps the bundled tarball small and avoids cross-
-origin font fetches inside the plugin iframe):
+Two webfonts ship inside `widget-lib`, declared via `@font-face` in
+`widget-lib.css` and loaded once per plugin UI:
+
+- **JetBrains Mono** Regular — the mono token (`--plk-font-mono`)
+- **Inter** Regular — the display token (`--plk-font-display`)
+
+Both are OFL 1.1, downloaded from Google Fonts, subset to Latin
+(`U+0000-00FF` + common typographic punctuation), and live as woff2
+in `widget-lib/fonts/`. Combined ~45 KB per plugin tarball.
+`font-display: swap` is set on both, so widgets paint with the
+system fallback (`ui-monospace` / `system-ui`) until the woff2
+arrives, then re-render — no FOIT.
+
+Tokens (defined in `widget-lib.css`):
 
 ```css
-:root {
-  --plk-font-mono:    ui-monospace, 'JetBrains Mono', 'Cascadia Mono', 'IBM Plex Mono', Menlo, Consolas, monospace;
-  --plk-font-display: system-ui, -apple-system, 'Inter', 'Segoe UI', Roboto, sans-serif;
-}
+--plk-font-mono:    'JetBrains Mono', ui-monospace, 'Cascadia Mono',
+                    'IBM Plex Mono', Menlo, Consolas, monospace;
+--plk-font-display: 'Inter', system-ui, -apple-system, 'Segoe UI',
+                    Roboto, sans-serif;
 ```
+
+The bundled name comes first in each stack; the system fallback
+covers the paint-before-load window and any environment where the
+woff2 can't be served (offline catalogue snapshot, etc.).
 
 Usage rule:
 
@@ -157,9 +172,12 @@ organ/limiter look). The widget chooses; rule of thumb:
 }
 ```
 
-If `apps/site` wants to use a webfont for the broader page, that
-lands in the site's CSS, not in `widget-lib`. The widget tokens
-inherit through cascading and pick up the webfont automatically.
+**Adding a weight or script:** drop the subset woff2 into
+`widget-lib/fonts/` (same naming pattern) and add an `@font-face`
+block to `widget-lib.css`. Stay subset to keep the per-plugin
+tarball lean — avoid shipping full-range files. License compliance
+(OFL 1.1) requires the source's `*-OFL.txt` to remain in
+`widget-lib/fonts/`.
 
 ## Pointer + touch
 

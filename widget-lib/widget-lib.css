@@ -1,0 +1,65 @@
+/* Plinken widget library — global stylesheet.
+   Loaded once per plugin UI (or once per page in the catalogue / designer).
+   Declares the bundled webfonts and the default theme tokens; every widget
+   reads through these names so a single [data-theme="..."] block reskins
+   the whole UI. */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/Inter-Regular.latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+    U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/JetBrainsMono-Regular.latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+    U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  /* Surface */
+  --plk-bg:           #1a1820;
+  --plk-bg-deep:      #0e0c12;
+  --plk-border:       #3a3540;
+  --plk-border-soft:  #2a2530;
+
+  /* Text */
+  --plk-text:         #e8e4f0;
+  --plk-text-dim:     #8b8095;
+
+  /* Accent */
+  --plk-accent:       #925db3;
+  --plk-accent-deep:  #6f478b;
+  --plk-accent-warn:  #d65a5a;
+  --plk-accent-alt:   #4ea3a5;
+
+  /* Typography */
+  --plk-font-mono:    'JetBrains Mono', ui-monospace, 'Cascadia Mono',
+                      'IBM Plex Mono', Menlo, Consolas, monospace;
+  --plk-font-display: 'Inter', system-ui, -apple-system, 'Segoe UI',
+                      Roboto, sans-serif;
+
+  /* Sizing */
+  --plk-radius:       2px;
+  --plk-thumb-size:   20px;
+}
+
+[data-theme="light"] {
+  --plk-bg:           #f4f1f8;
+  --plk-bg-deep:      #e6e1ec;
+  --plk-border:       #c8bfd2;
+  --plk-border-soft:  #ddd5e4;
+  --plk-text:         #2a2530;
+  --plk-text-dim:     #6e6478;
+  /* accents inherit from :root; themes can override if they want */
+}
