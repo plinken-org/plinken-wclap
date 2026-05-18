@@ -13,6 +13,7 @@ Plugins authored by **Plinken** ([plinken.com](https://plinken.com) /
 | `synome`          | Rust           | Polysynth scaffold |
 | `vocal-limiter`   | Rust (fundsp)  | Lookahead brickwall |
 | `organ`           | **Cmajor**     | Hammond drawbar synth — first user of the `cmaj → WASI-SDK → .wclap` pipeline (`scripts/build-cmaj-wclap.sh`) |
+| `piano`           | **Cmajor**     | Additive piano w/ stretched tuning — second pipeline user, pure-synthesis variant (no externals) |
 
 ## Contact
 

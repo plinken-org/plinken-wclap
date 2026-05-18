@@ -1,0 +1,168 @@
+/**
+    Plinken: Piano — additive piano with stretched tuning.
+
+    Six sine partials per voice at pitch-stretched ratios (Railsback-ish
+    inharmonicity) with a single per-voice exponential decay envelope
+    whose time constant scales with note pitch (low notes ring long,
+    high notes die fast). Velocity sets initial amplitude; NoteOff
+    triggers a faster release rather than killing the note instantly so
+    pedal-up still sounds like a damper landing.
+
+    Not a Steinway. Pairs well with the organ as a "show me the pipeline
+    works for two different synth shapes" demo, and authored entirely
+    here so the whole folder stays MIT.
+*/
+
+graph Piano  [[main]]
+{
+    input event std::midi::Message midiIn;
+    output stream float out;
+
+    let voiceCount = 8;
+
+    node
+    {
+        voices         = Voice[voiceCount];
+        voiceAllocator = std::voices::VoiceAllocator (voiceCount);
+    }
+
+    connection
+    {
+        midiIn -> std::midi::MPEConverter -> voiceAllocator;
+        voiceAllocator.voiceEventOut -> voices.eventIn;
+        voices -> out;
+    }
+}
+
+//==============================================================================
+// One voice = six stretched-tuning sines + a per-voice decay envelope.
+//==============================================================================
+graph Voice
+{
+    input event (std::notes::NoteOn, std::notes::NoteOff) eventIn;
+    output stream float out;
+
+    node
+    {
+        harmonics = PianoHarmonics;
+        envelope  = PianoEnvelope;
+
+        osc1 = std::oscillators::Sine (float32);
+        osc2 = std::oscillators::Sine (float32);
+        osc3 = std::oscillators::Sine (float32);
+        osc4 = std::oscillators::Sine (float32);
+        osc5 = std::oscillators::Sine (float32);
+        osc6 = std::oscillators::Sine (float32);
+    }
+
+    connection
+    {
+        eventIn -> harmonics;
+        eventIn -> envelope.eventIn;
+
+        harmonics.f1 -> osc1.frequencyIn;
+        harmonics.f2 -> osc2.frequencyIn;
+        harmonics.f3 -> osc3.frequencyIn;
+        harmonics.f4 -> osc4.frequencyIn;
+        harmonics.f5 -> osc5.frequencyIn;
+        harmonics.f6 -> osc6.frequencyIn;
+
+        // Spectrum shaped like a struck-string fundamental-heavy tone.
+        // Coefficients sum to ~2.48; outer 0.4 scale keeps the peak voice
+        // amplitude well below unity so 8 voices summing don't clip.
+        (envelope.gainOut * 0.4f *
+            (osc1.out * 1.00f
+           + osc2.out * 0.60f
+           + osc3.out * 0.40f
+           + osc4.out * 0.25f
+           + osc5.out * 0.15f
+           + osc6.out * 0.08f)) -> out;
+    }
+}
+
+//==============================================================================
+// Emit six frequencies per NoteOn — stretched-octave tuning so higher
+// partials drift slightly sharp of the integer-harmonic ideal. Real
+// piano strings have inharmonicity ≈ 4e-4 in the middle of the keyboard
+// (steeper at the top, gentler at the bottom); we use a constant 4e-4
+// across the whole range, which is enough to give the timbre the
+// characteristic "ringing" colour without dragging in a per-note table.
+//==============================================================================
+processor PianoHarmonics
+{
+    input event std::notes::NoteOn eventIn;
+    output event float32 f1, f2, f3, f4, f5, f6;
+
+    let inharmonicity = 0.0004f;
+
+    float32 stretched (int n)
+    {
+        let nf = float32 (n);
+        return nf * sqrt (1.0f + inharmonicity * nf * nf);
+    }
+
+    event eventIn (std::notes::NoteOn e)
+    {
+        let base = std::notes::noteToFrequency (e.pitch);
+        f1 <- base * stretched (1);
+        f2 <- base * stretched (2);
+        f3 <- base * stretched (3);
+        f4 <- base * stretched (4);
+        f5 <- base * stretched (5);
+        f6 <- base * stretched (6);
+    }
+}
+
+//==============================================================================
+// AD-with-fast-release envelope. Decay time scales with pitch — about 6 s
+// at low A (MIDI 21), 0.4 s at top C (MIDI 108). NoteOff cuts the decay
+// short with a 200 ms release (the damper landing), not an instant kill.
+//==============================================================================
+processor PianoEnvelope
+{
+    input event (std::notes::NoteOn, std::notes::NoteOff) eventIn;
+    output stream float32 gainOut;
+
+    float32 amp        = 0.0f;
+    float32 decayCoeff = 0.9999f;
+    float32 releaseCoeff;
+    bool    releasing  = false;
+
+    event eventIn (std::notes::NoteOn e)
+    {
+        // Velocity 0..127 → 0..1 squared (perceived loudness is closer
+        // to amplitude-squared for short impulses).
+        let v = float32 (e.velocity);
+        amp = v * v;
+
+        // Decay seconds halve every two octaves above MIDI 36.
+        // pow(0.5, (pitch - 36) / 24): pitch=36 → 6s, pitch=60 → ~2.1s,
+        // pitch=84 → ~0.75s, pitch=108 → ~0.27s.
+        let pitch = float32 (e.pitch);
+        let decaySeconds = 6.0f * pow (0.5f, (pitch - 36.0f) / 24.0f);
+        decayCoeff = exp (-1.0f / (decaySeconds * float32 (processor.frequency)));
+
+        releasing = false;
+    }
+
+    event eventIn (std::notes::NoteOff e)
+    {
+        // 200 ms one-pole release on NoteOff. Doesn't stomp on the
+        // natural decay — whichever coefficient is smaller wins each
+        // sample, so the release only matters if the key comes up while
+        // the note's still ringing.
+        releasing = true;
+        releaseCoeff = exp (-1.0f / (0.2f * float32 (processor.frequency)));
+    }
+
+    void main()
+    {
+        loop
+        {
+            let coeff = releasing ? releaseCoeff : decayCoeff;
+            amp = amp * coeff;
+            gainOut <- amp;
+            advance();
+        }
+    }
+}

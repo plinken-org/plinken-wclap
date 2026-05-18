@@ -1,0 +1,11 @@
+{
+  "name": "@plinken/piano",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Additive piano with stretched tuning — second Cmajor-authored WCLAP plugin.",
+  "scripts": {
+    "build:wasm": "bash ../../../scripts/build-cmaj-wclap.sh . Piano.cmajorpatch dist/piano.wclap.wasm",
+    "build": "pnpm run build:wasm && node ../../../scripts/bundle-wclap.mjs ."
+  }
+}

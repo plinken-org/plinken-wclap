@@ -1,0 +1,23 @@
+{
+  "manifest_version": 1,
+  "id": "com.plinken.piano",
+  "name": "Piano",
+  "vendor": "Plinken",
+  "version": "0.0.1",
+  "description": "Additive piano — 6 stretched-tuning partials per voice, pitch-dependent exponential decay, 8 voices. Second user of the cmaj → WASI-SDK → .wclap pipeline.",
+  "features": ["instrument", "synthesizer"],
+  "license": "MIT",
+  "homepage": "https://plinken.org",
+  "source": "Piano.cmajor",
+  "artifact": "dist/piano.wclap.tar.gz",
+  "format": "tar.gz",
+  "has_ui": false,
+  "plugins": [
+    {
+      "id": "com.plinken.piano",
+      "name": "Piano",
+      "features": ["instrument", "synthesizer"],
+      "has_ui": false
+    }
+  ]
+}

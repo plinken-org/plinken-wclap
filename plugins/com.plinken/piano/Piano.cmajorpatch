@@ -1,0 +1,11 @@
+{
+  "CmajorVersion": 1,
+  "ID": "com.plinken.piano",
+  "version": "0.0.1",
+  "name": "Piano",
+  "description": "Additive piano with stretched tuning. 6 partials per voice, pitch-dependent exponential decay, 8 voices.",
+  "manufacturer": "Plinken",
+  "category": "synth",
+  "isInstrument": true,
+  "source": "Piano.cmajor"
+}
