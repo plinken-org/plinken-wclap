@@ -8,17 +8,21 @@
 //   import { PlinkenWidget } from '../widget-lib/widget-base.mjs';
 //
 //   class MyDial extends PlinkenWidget {
-//     onMeta(meta)  { /* render from meta.min/max/init/unit/step/... */ }
-//     onValue(v)    { /* update visuals */ }
+//     onMeta(meta) { /* render from meta.min/max/init/unit/step/... */ }
+//     onValue(v)   { /* update visuals */ }
 //   }
 //   customElements.define('my-dial', MyDial);
 //
 //   document.querySelector('my-dial[endpoint="gain"]').setConnection(conn);
+//
+// For non-parameter feeds (FFT arrays, MIDI streams, custom transports)
+// see `subscribeEndpoint` below, the `conn` escape hatch, and the
+// "Data feeds beyond parameters" section in AUTHORING.md.
 
 export class PlinkenWidget extends HTMLElement {
   #conn = null;
   #ep = null;
-  #listener = null;
+  #cleanups = [];
 
   setConnection(conn) {
     this.#conn = conn;
@@ -32,16 +36,20 @@ export class PlinkenWidget extends HTMLElement {
     const meta = status.parameters.find(p => p.endpointID === this.#ep);
     this.onMeta(meta);
 
-    // Subscribe to live changes
-    this.#listener = (v) => this.onValue(v);
-    this.#conn.addParameterListener(this.#ep, this.#listener);
+    // Subscribe to live parameter changes (auto-torn-down on disconnect)
+    const onValue = (v) => this.onValue(v);
+    this.#conn.addParameterListener(this.#ep, onValue);
+    this.#cleanups.push(() => this.#conn.removeParameterListener(this.#ep, onValue));
 
     // Pull current value
     this.#conn.requestParameterValue(this.#ep);
   }
 
   disconnectedCallback() {
-    if (this.#listener) this.#conn?.removeParameterListener(this.#ep, this.#listener);
+    for (const fn of this.#cleanups) {
+      try { fn(); } catch {}
+    }
+    this.#cleanups.length = 0;
   }
 
   // Subclasses override these:
@@ -54,4 +62,17 @@ export class PlinkenWidget extends HTMLElement {
     this.#conn.sendEventOrValue(this.#ep, value);
     if (gesture) this.#conn.sendParameterGestureEnd(this.#ep);
   }
+
+  // Subscribe to a non-parameter endpoint (stream / event / array feed).
+  // Wraps the Cmajor PatchConnection addEndpointListener / remove pair
+  // and auto-tears-down in disconnectedCallback. Use this from `onMeta`
+  // in spectrum / waveform / meter / keyboard widgets.
+  subscribeEndpoint(endpoint, cb) {
+    this.#conn.addEndpointListener(endpoint, cb);
+    this.#cleanups.push(() => this.#conn.removeEndpointListener(endpoint, cb));
+  }
+
+  // Escape hatch for unusual transports — full PatchConnection handle.
+  // Prefer the helpers above; reach for this only when nothing else fits.
+  get conn() { return this.#conn; }
 }

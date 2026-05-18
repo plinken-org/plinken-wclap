@@ -51,6 +51,80 @@ Do not override the constructor unless you need to set up state
 that predates `setConnection()`. The base class is happy with the
 default constructor.
 
+## Data feeds beyond parameters
+
+Most widgets (knob, fader, toggle, switch, …) only need the scalar
+parameter channel the base class wires up by default. Visualisers
+(spectrum, waveform, meter) and input widgets that handle event /
+MIDI streams need more. Two handles cover everything; pick the one
+that matches how the data flows.
+
+### Inside-out — widget subscribes via `conn`
+
+When a patch exposes the feed as a Cmajor stream or event endpoint,
+the widget pulls it in `onMeta` using the base class helper:
+
+```js
+class PlinkenSpectrum extends PlinkenWidget {
+  onMeta(meta) {
+    // … render the canvas + axes from `meta` …
+    const bandsEndpoint = this.getAttribute('bands-endpoint');
+    this.subscribeEndpoint(bandsEndpoint, (arr) => {
+      this.pushBands(arr);    // drives the same render path as outside-in
+    });
+  }
+
+  pushBands(arr) { /* smoothing + draw */ }
+}
+```
+
+`subscribeEndpoint(endpoint, cb)` wraps Cmajor's
+`addEndpointListener` / `removeEndpointListener` pair and registers
+the teardown so it fires from `disconnectedCallback` alongside the
+parameter listener. The widget never touches lifecycle directly.
+
+### Outside-in — host pushes via a public method
+
+When the data arrives over a transport the widget can't subscribe to
+itself (a custom message channel, a Web Audio `AnalyserNode`, a unit
+test, the designer's `MockConnection`), expose a public method on
+the widget and have the plugin's `ui/index.html` script call it:
+
+```js
+// In the widget:
+class PlinkenSpectrum extends PlinkenWidget {
+  pushBands(arr) { /* smoothing + draw */ }
+}
+
+// In the plugin's ui/index.html:
+const spec = document.querySelector('plinken-spectrum');
+transport.onSpectrum((arr) => spec.pushBands(arr));
+```
+
+Public methods are just DOM API — no base-class plumbing needed.
+The widget stays decoupled from any specific transport, so the same
+element can be driven from any source that produces the right
+shape of data (handy for the catalogue's mock conn and the
+designer's preview).
+
+### Escape hatch — `this.conn`
+
+`this.conn` (a getter on the base class) returns the full Cmajor
+`PatchConnection`. Use it only when neither helper above fits — for
+example, a widget that needs to send MIDI input events
+(`sendMIDIInputEvent`) or query a sibling endpoint's metadata. If a
+new pattern shows up twice, promote it to a helper on the base
+class rather than copy-pasting `conn` access.
+
+### Rule of thumb
+
+| Data flow                          | Use                          |
+|------------------------------------|------------------------------|
+| Scalar param, owned by the widget  | base class default           |
+| Stream / event endpoint            | `subscribeEndpoint(ep, cb)`  |
+| Custom transport, host-driven      | public method on the widget  |
+| Anything else                      | `this.conn` escape hatch     |
+
 ## Attributes
 
 Full schema in `DESIGNER.md`. Two rules:

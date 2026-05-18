@@ -40,7 +40,7 @@ work — see `DESIGNER.md` § Bundler integration).
 export class PlinkenWidget extends HTMLElement {
   #conn = null;
   #ep = null;
-  #listener = null;
+  #cleanups = [];
 
   setConnection(conn) {
     this.#conn = conn;
@@ -54,16 +54,18 @@ export class PlinkenWidget extends HTMLElement {
     const meta = status.parameters.find(p => p.endpointID === this.#ep);
     this.onMeta(meta);
 
-    // Subscribe to live changes
-    this.#listener = (v) => this.onValue(v);
-    this.#conn.addParameterListener(this.#ep, this.#listener);
+    // Subscribe to live parameter changes (auto-torn-down on disconnect)
+    const onValue = (v) => this.onValue(v);
+    this.#conn.addParameterListener(this.#ep, onValue);
+    this.#cleanups.push(() => this.#conn.removeParameterListener(this.#ep, onValue));
 
     // Pull current value
     this.#conn.requestParameterValue(this.#ep);
   }
 
   disconnectedCallback() {
-    if (this.#listener) this.#conn?.removeParameterListener(this.#ep, this.#listener);
+    for (const fn of this.#cleanups) { try { fn(); } catch {} }
+    this.#cleanups.length = 0;
   }
 
   // Subclasses override these:
@@ -76,6 +78,16 @@ export class PlinkenWidget extends HTMLElement {
     this.#conn.sendEventOrValue(this.#ep, value);
     if (gesture) this.#conn.sendParameterGestureEnd(this.#ep);
   }
+
+  // Subscribe to a non-parameter endpoint (stream / event / array feed) —
+  // auto-cleaned on disconnect. Use from onMeta in spectrum / waveform / etc.
+  subscribeEndpoint(endpoint, cb) {
+    this.#conn.addEndpointListener(endpoint, cb);
+    this.#cleanups.push(() => this.#conn.removeEndpointListener(endpoint, cb));
+  }
+
+  // Escape hatch — full PatchConnection handle for unusual transports.
+  get conn() { return this.#conn; }
 }
 ```
 
