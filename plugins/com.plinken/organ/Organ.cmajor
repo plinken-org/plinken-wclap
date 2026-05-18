@@ -26,17 +26,23 @@ graph Organ  [[main]]
     output stream float out;
 
     // Graph-level params fan out to every voice. Drawbar range 0..8 is the
-    // physical Hammond drawbar travel — we divide by 8 inside the voice to
-    // get a 0..1 amplitude.
-    input voices.drawbar1  drawbar_16    [[ name: "16'",     min: 0, max: 8, init: 8, step: 1 ]];
-    input voices.drawbar2  drawbar_5_1_3 [[ name: "5 1/3'",  min: 0, max: 8, init: 8, step: 1 ]];
-    input voices.drawbar3  drawbar_8     [[ name: "8'",      min: 0, max: 8, init: 8, step: 1 ]];
-    input voices.drawbar4  drawbar_4     [[ name: "4'",      min: 0, max: 8, init: 0, step: 1 ]];
-    input voices.drawbar5  drawbar_2_2_3 [[ name: "2 2/3'",  min: 0, max: 8, init: 0, step: 1 ]];
-    input voices.drawbar6  drawbar_2     [[ name: "2'",      min: 0, max: 8, init: 0, step: 1 ]];
-    input voices.drawbar7  drawbar_1_3_5 [[ name: "1 3/5'",  min: 0, max: 8, init: 0, step: 1 ]];
-    input voices.drawbar8  drawbar_1_1_3 [[ name: "1 1/3'",  min: 0, max: 8, init: 0, step: 1 ]];
-    input voices.drawbar9  drawbar_1     [[ name: "1'",      min: 0, max: 8, init: 0, step: 1 ]];
+    // physical Hammond drawbar travel — the voice sums osc.out * drawbar and
+    // divides by 72 to keep us at-or-below unity.
+    //
+    // The natural form here is `input voices.drawbar1 drawbar_16 [[…]]` (an
+    // input whose value is broadcast to every element of a node array), but
+    // cmaj 1.0.3066 errors with "Language feature not yet implemented:
+    // top-level arrays of inputs!" on that syntax. Fan the drawbars out
+    // manually in the connection block instead — verbose but compiles today.
+    input value float drawbar_16    [[ name: "16'",     min: 0, max: 8, init: 8, step: 1 ]];
+    input value float drawbar_5_1_3 [[ name: "5 1/3'",  min: 0, max: 8, init: 8, step: 1 ]];
+    input value float drawbar_8     [[ name: "8'",      min: 0, max: 8, init: 8, step: 1 ]];
+    input value float drawbar_4     [[ name: "4'",      min: 0, max: 8, init: 0, step: 1 ]];
+    input value float drawbar_2_2_3 [[ name: "2 2/3'",  min: 0, max: 8, init: 0, step: 1 ]];
+    input value float drawbar_2     [[ name: "2'",      min: 0, max: 8, init: 0, step: 1 ]];
+    input value float drawbar_1_3_5 [[ name: "1 3/5'",  min: 0, max: 8, init: 0, step: 1 ]];
+    input value float drawbar_1_1_3 [[ name: "1 1/3'",  min: 0, max: 8, init: 0, step: 1 ]];
+    input value float drawbar_1     [[ name: "1'",      min: 0, max: 8, init: 0, step: 1 ]];
 
     let voiceCount = 8;
 
@@ -51,6 +57,19 @@ graph Organ  [[main]]
         midiIn -> std::midi::MPEConverter -> voiceAllocator;
         voiceAllocator.voiceEventOut -> voices.eventIn;
         voices -> out;
+
+        // Drawbar fan-out: one graph input → all eight voices. In a
+        // connection block, `voices.drawbarN` (no index) broadcasts to
+        // every element of the `Voice[]` array node.
+        drawbar_16    -> voices.drawbar1;
+        drawbar_5_1_3 -> voices.drawbar2;
+        drawbar_8     -> voices.drawbar3;
+        drawbar_4     -> voices.drawbar4;
+        drawbar_2_2_3 -> voices.drawbar5;
+        drawbar_2     -> voices.drawbar6;
+        drawbar_1_3_5 -> voices.drawbar7;
+        drawbar_1_1_3 -> voices.drawbar8;
+        drawbar_1     -> voices.drawbar9;
     }
 }
 

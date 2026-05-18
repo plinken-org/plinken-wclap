@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Piano</title>
+<link rel="stylesheet" href="../widgets/widgets.css">
+<style>
+  html, body { margin: 0; padding: 0; background: var(--bg-deep); color: var(--text); height: 100%; }
+  body {
+    font-family: var(--font-mono);
+    display: grid;
+    align-items: center;
+    justify-items: center;
+  }
+
+  /* Dark Plinken-brand panel — periwinkle accent on hover/drag.
+     Distinguishes the piano visually from the organ's wooden panel. */
+  .panel {
+    background: linear-gradient(180deg,
+                  rgba(255,255,255,0.03),
+                  rgba(0,0,0,0.02)),
+                #0e1024;
+    border: 1px solid #1a1d3a;
+    border-radius: 8px;
+    padding: 12px 18px 14px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05),
+                inset 0 -1px 0 rgba(0,0,0,0.4);
+  }
+
+  .panel-title {
+    text-align: center;
+    font-size: 0.7rem;
+    letter-spacing: 0.16em;
+    color: rgba(195, 196, 255, 0.85);
+    margin-bottom: 8px;
+  }
+
+  .knobs {
+    display: grid;
+    grid-template-columns: repeat(3, max-content);
+    gap: 20px;
+    align-items: end;
+  }
+
+  .knob-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 70px;
+  }
+  .knob-label {
+    font-size: 0.6rem;
+    letter-spacing: 0.08em;
+    color: rgba(195, 196, 255, 0.7);
+    text-transform: uppercase;
+  }
+
+  /* Override Fader styling to a slimmer Plinken-accent slider. */
+  .fader-track {
+    --fader-h: 110px;
+    --fader-thumb: 26px;
+    --fader-track-w: 4px;
+    background: transparent;
+  }
+  .fader-track::before { background: #1a1d3a; }
+  .fader-fill {
+    background: linear-gradient(180deg, #a8a5ff, #6f6cff);
+  }
+  .fader.dragging .fader-fill {
+    background: linear-gradient(180deg, #c4c2ff, #8d8aff);
+  }
+  .fader-thumb {
+    background: #c8c8ff;
+    width: 24px;
+    height: 6px;
+    border-radius: 2px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+  }
+  .fader.dragging .fader-thumb { background: #e8e6ff; }
+  .fader-readout {
+    color: rgba(195, 196, 255, 0.85);
+    font-size: 0.65rem;
+    min-width: 4ch;
+  }
+  .fader-label { display: none; }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <div class="panel-title">PLINKEN PIANO</div>
+    <div class="knobs" id="knobs"></div>
+  </div>
+
+<script type="module">
+  import { Fader } from '../widgets/fader.mjs';
+
+  // Param ids = the cmaj endpoint handles the shim exposes via
+  // clap.params. Source of truth: Piano.cmajor input declaration order
+  // (piano → handle 2, fx → 3, spread → 4).
+  const PARAMS = [
+    { id: 2, label: 'Piano',  min: 0, max: 1.5, def: 1.00, fmt: v => v.toFixed(2) },
+    { id: 3, label: 'FX',     min: 0, max: 1.0, def: 0.35, fmt: v => v.toFixed(2) },
+    { id: 4, label: 'Spread', min: 0, max: 1.0, def: 0.60, fmt: v => v.toFixed(2) },
+  ];
+
+  const knobsEl = document.getElementById('knobs');
+  for (const p of PARAMS) {
+    const col = document.createElement('div');
+    col.className = 'knob-col';
+
+    const mount = document.createElement('div');
+    col.appendChild(mount);
+
+    const tag = document.createElement('div');
+    tag.className = 'knob-label';
+    tag.textContent = p.label;
+    col.appendChild(tag);
+
+    const f = new Fader(mount, {
+      id: p.id,
+      min: p.min, max: p.max, default: p.def,
+      label: p.label,
+      format: p.fmt,
+    });
+    f.onChange((v, id) => {
+      window.parent.postMessage(encodeSet(id, v), '*');
+    });
+    knobsEl.appendChild(col);
+  }
+
+  Promise.resolve().then(() => {
+    window.parent.postMessage(encodeReady(), '*');
+  });
+
+  // Tiny CBOR encoders — must match widgets/cbor.mjs exactly. Duplicated
+  // here so the iframe avoids importing the full helper module just for
+  // these two shapes.
+  function encodeSet(id, value) {
+    const buf = new ArrayBuffer(20);
+    const v = new DataView(buf);
+    v.setUint8(0, 0xa1);
+    v.setUint8(1, 0x63);
+    v.setUint8(2, 0x73); v.setUint8(3, 0x65); v.setUint8(4, 0x74);
+    v.setUint8(5, 0x82);
+    v.setUint8(6, 0x1a);
+    v.setUint32(7, id, false);
+    v.setUint8(11, 0xfb);
+    v.setFloat64(12, value, false);
+    return buf;
+  }
+  function encodeReady() {
+    return new Uint8Array([0x65, 0x72, 0x65, 0x61, 0x64, 0x79]).buffer;
+  }
+</script>
+</body>
+</html>

@@ -1,3 +1,6 @@
 [submodule "vendor/wclap-host-js"]
 	path = vendor/wclap-host-js
 	url = https://github.com/WebCLAP/wclap-host-js
+[submodule "vendor/clap"]
+	path = vendor/clap
+	url = https://github.com/free-audio/clap

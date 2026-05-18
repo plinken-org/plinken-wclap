@@ -11,13 +11,17 @@
   "source": "Piano.cmajor",
   "artifact": "dist/piano.wclap.tar.gz",
   "format": "tar.gz",
-  "has_ui": false,
+  "has_ui": true,
+  "ui": {
+    "compact_size": [280, 76],
+    "expanded_size": [300, 200]
+  },
   "plugins": [
     {
       "id": "com.plinken.piano",
       "name": "Piano",
       "features": ["instrument", "synthesizer"],
-      "has_ui": false
+      "has_ui": true
     }
   ]
 }

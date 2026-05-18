@@ -11,13 +11,17 @@
   "source": "Organ.cmajor",
   "artifact": "dist/organ.wclap.tar.gz",
   "format": "tar.gz",
-  "has_ui": false,
+  "has_ui": true,
+  "ui": {
+    "compact_size": [320, 88],
+    "expanded_size": [340, 220]
+  },
   "plugins": [
     {
       "id": "com.plinken.organ",
       "name": "Organ",
       "features": ["instrument", "synthesizer"],
-      "has_ui": false
+      "has_ui": true
     }
   ]
 }

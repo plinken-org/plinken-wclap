@@ -39,24 +39,6 @@ importers:
         specifier: ^4.90.1
         version: 4.90.1(@cloudflare/workers-types@4.20260511.1)
 
-  apps/vocal-host:
-    devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^4.20241106.0
-        version: 4.20260511.1
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.19.19
-      typescript:
-        specifier: ^5.5.0
-        version: 5.9.3
-      vite:
-        specifier: ^5.4.0
-        version: 5.4.21(@types/node@22.19.19)
-      wrangler:
-        specifier: ^4.90.1
-        version: 4.90.1(@cloudflare/workers-types@4.20260511.1)
-
   apps/wclap-host:
     devDependencies:
       '@cloudflare/workers-types':
@@ -87,6 +69,12 @@ importers:
       assemblyscript:
         specifier: ^0.28.9
         version: 0.28.17
+
+  plugins/com.plinken/organ: {}
+
+  plugins/com.plinken/piano: {}
+
+  plugins/com.plinken/spectrum: {}
 
   plugins/com.plinken/synome: {}
 

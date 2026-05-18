@@ -16,7 +16,15 @@
 graph Piano  [[main]]
 {
     input event std::midi::Message midiIn;
-    output stream float out;
+    output stream float<2> out;
+
+    // Mixed-bus controls — exposed at the graph level so the wclap-shim's
+    // params extractor picks them up alongside the FX processor's own
+    // params. Defaults give "piano with a touch of room": full dry, a
+    // little wet, moderate spread.
+    input pianoFx.piano  piano  [[ name: "Piano",  min: 0, max: 1.5, init: 1.0,  step: 0 ]];
+    input pianoFx.fx     fx     [[ name: "FX",     min: 0, max: 1.0, init: 0.35, step: 0 ]];
+    input pianoFx.spread spread [[ name: "Spread", min: 0, max: 1.0, init: 0.6,  step: 0 ]];
 
     let voiceCount = 8;
 
@@ -24,13 +32,61 @@ graph Piano  [[main]]
     {
         voices         = Voice[voiceCount];
         voiceAllocator = std::voices::VoiceAllocator (voiceCount);
+        pianoFx        = PianoFx;
     }
 
     connection
     {
         midiIn -> std::midi::MPEConverter -> voiceAllocator;
         voiceAllocator.voiceEventOut -> voices.eventIn;
-        voices -> out;
+        voices  -> pianoFx.in;
+        pianoFx.out -> out;
+    }
+}
+
+//==============================================================================
+// Stereo width via two short delays — one earlier on the left, one later
+// on the right (Haas precedence). At `spread = 0` both taps land at the
+// same time and the image collapses to mono; at `spread = 1` the L tap
+// arrives ~15 ms before centre and the R tap ~15 ms after, giving a wide
+// stereo without sounding like an obvious slap-delay. No feedback —
+// the goal is "small room", not "echo chamber".
+//==============================================================================
+processor PianoFx
+{
+    input  stream float    in;
+    output stream float<2> out;
+
+    input value float piano;
+    input value float fx;
+    input value float spread;
+
+    // 16384 samples = ~85 ms at 192 kHz, plenty for our ±15 ms taps.
+    // Compile-time size; cmaj 1.0.3066 won't size the array from
+    // processor.frequency at runtime.
+    let bufLen = 16384;
+    float[bufLen] buf;
+    wrap<bufLen> writePos;
+
+    void main()
+    {
+        // Centre delay 30 ms, max ±15 ms span. Computed once at start
+        // since processor.frequency is constant within a processor
+        // instance — no need to recompute per-sample.
+        let centreSamples = int (processor.frequency * 0.030);
+        let spanSamples   = int (processor.frequency * 0.015);
+
+        loop
+        {
+            buf[writePos] = in;
+            let span = int (float (spanSamples) * spread);
+            let wetL = buf.at (writePos - (centreSamples - span));
+            let wetR = buf.at (writePos - (centreSamples + span));
+            out <- float<2> (piano * in + fx * wetL,
+                             piano * in + fx * wetR);
+            ++writePos;
+            advance();
+        }
     }
 }
 
@@ -124,8 +180,11 @@ processor PianoEnvelope
     output stream float32 gainOut;
 
     float32 amp        = 0.0f;
+    float32 target     = 0.0f;
+    float32 attackInc  = 0.0f;
     float32 decayCoeff = 0.9999f;
     float32 releaseCoeff;
+    bool    attacking  = false;
     bool    releasing  = false;
 
     event eventIn (std::notes::NoteOn e)
@@ -133,7 +192,15 @@ processor PianoEnvelope
         // Velocity 0..127 → 0..1 squared (perceived loudness is closer
         // to amplitude-squared for short impulses).
         let v = float32 (e.velocity);
-        amp = v * v;
+        target = v * v;
+
+        // ~3 ms linear attack ramp from current amp to target. Without
+        // this, NoteOn produces a sample-rate-quantised step from 0 to
+        // target on the first frame — audible as a hard click that
+        // overwhelms the partial-decay tail we actually want to hear.
+        let attackFrames = 0.003f * float32 (processor.frequency);
+        attackInc = (target - amp) / attackFrames;
+        attacking = true;
 
         // Decay seconds halve every two octaves above MIDI 36.
         // pow(0.5, (pitch - 36) / 24): pitch=36 → 6s, pitch=60 → ~2.1s,
@@ -159,8 +226,20 @@ processor PianoEnvelope
     {
         loop
         {
-            let coeff = releasing ? releaseCoeff : decayCoeff;
-            amp = amp * coeff;
+            if (attacking)
+            {
+                amp = amp + attackInc;
+                if (amp >= target)
+                {
+                    amp = target;
+                    attacking = false;
+                }
+            }
+            else
+            {
+                let coeff = releasing ? releaseCoeff : decayCoeff;
+                amp = amp * coeff;
+            }
             gainOut <- amp;
             advance();
         }
