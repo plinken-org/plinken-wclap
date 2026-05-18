@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Base class for Plinken plugin UI widgets implemented as custom elements.
 // Each widget binds to one wclap-host endpoint: annotations arrive in
 // onMeta(), live values in onValue(), and UI gestures route back via
