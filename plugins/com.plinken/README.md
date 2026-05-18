@@ -6,9 +6,13 @@ Plugins authored by **Plinken** ([plinken.com](https://plinken.com) /
 
 ## Plugins
 
-_None yet — this folder is the placeholder for the first authored WCLAP
-plugins published by Plinken. Expect the vocoder mentioned in the project
-roadmap to land here first._
+| Plugin            | Authored in | Notes |
+|-------------------|-------------|-------|
+| `auto-pan`        | AssemblyScript | LFO panner |
+| `spectrum`        | Rust (fundsp)  | FFT analyser, UI-only |
+| `synome`          | Rust           | Polysynth scaffold |
+| `vocal-limiter`   | Rust (fundsp)  | Lookahead brickwall |
+| `organ`           | **Cmajor**     | Hammond drawbar synth — first user of the `cmaj → WASI-SDK → .wclap` pipeline (`scripts/build-cmaj-wclap.sh`) |
 
 ## Contact
 

@@ -118,6 +118,61 @@ AudioUnit::set_sample_rate(&mut self.unit, sample_rate);
 
 Applies to every Rust plugin we ship (vocal-* trio, synome's future voice pool, etc.).
 
+## Cmajor → WCLAP pipeline
+
+Cmajor-authored plugins live alongside the Rust ones under
+`plugins/<vendor>/<name>/` and ship the same `.wclap.tar.gz` artifact, so
+`scripts/build-shelf.mjs` is one path for both. The build wrapper is
+`scripts/build-cmaj-wclap.sh` and the canonical user is
+`plugins/com.plinken/organ/` — copy that as the template for a new
+Cmajor plugin.
+
+Pipeline:
+
+```
+.cmajorpatch
+   │  cmaj generate --target=clap --clapIncludePath=vendor/clap/include
+   ▼
+generated/clap/*.cpp           (self-contained CLAP C++, no JIT)
+   │  ${WASI_SDK}/bin/clang++ --target=wasm32-wasi -fno-exceptions
+   │    -fno-rtti -Oz  -Wl,--export=clap_entry --export-table --growable-table
+   ▼
+dist/<name>.wclap.wasm
+   │  scripts/bundle-wclap.mjs (same as the Rust plugins use)
+   ▼
+dist/<name>.wclap.tar.gz       → picked up by build-shelf.mjs
+```
+
+### Tooling assumptions (not vendored)
+
+- **`cmaj`** — install from
+  [cmajor-lang/cmajor releases](https://github.com/cmajor-lang/cmajor/releases),
+  put on `$PATH`, or `CMAJ=/path/to/cmaj`.
+- **WASI-SDK** — unpack a release from
+  [WebAssembly/wasi-sdk releases](https://github.com/WebAssembly/wasi-sdk/releases)
+  to `/opt/wasi-sdk`, or `WASI_SDK=/path/to/it`.
+- **CLAP headers** — `git submodule add https://github.com/free-audio/clap vendor/clap`.
+  The headers are the CLAP ABI; they're tiny, version-stable, and
+  shared by every CLAP language binding.
+
+The build script fails with a one-line "install X / set ENV" message
+when any of the three are missing — no wall of C++ template errors.
+
+### Why the same `--export-table --growable-table` story applies
+
+Same reason as Rust (see the rust-lld note above). `wclap-host-js` grows
+the function table at runtime to install trampolines for host callbacks;
+without `--growable-table` lld emits `max == initial` and the host traps
+the first `WebAssembly.Table.grow()`.
+
+### Why not use cmaj's CMakeLists.txt
+
+It exists, but it targets native CLAP (JUCE-free webview, platform GUI).
+Driving `clang++` directly keeps the wasm-specific link flags in one
+place and avoids dragging in CMake just to compile a handful of `.cpp`
+files. Switch to the cmaj CMake project the day we want feature parity
+with native CLAP builds (signing, codesign, etc.).
+
 ## How a plugin UI iframe is routed
 
 The flow from "plugin has a UI" to "iframe shows content" is non-obvious; we bit a bug on it shipping vocal-limiter. The full path:
