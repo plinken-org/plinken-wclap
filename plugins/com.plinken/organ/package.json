@@ -1,0 +1,11 @@
+{
+  "name": "@plinken/organ",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Hammond-style drawbar organ — first Cmajor-authored WCLAP plugin.",
+  "scripts": {
+    "build:wasm": "bash ../../../scripts/build-cmaj-wclap.sh . Organ.cmajorpatch dist/organ.wclap.wasm",
+    "build": "pnpm run build:wasm && node ../../../scripts/bundle-wclap.mjs ."
+  }
+}

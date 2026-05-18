@@ -1,0 +1,23 @@
+{
+  "manifest_version": 1,
+  "id": "com.plinken.organ",
+  "name": "Organ",
+  "vendor": "Plinken",
+  "version": "0.0.1",
+  "description": "Hammond-style additive tonewheel organ. 9 drawbars (16' / 5 1/3' / 8' / 4' / 2 2/3' / 2' / 1 3/5' / 1 1/3' / 1'), 8-voice polyphony. First Cmajor-authored plugin in com.plinken — proves the cmaj → WASI-SDK → .wclap pipeline.",
+  "features": ["instrument", "synthesizer"],
+  "license": "MIT",
+  "homepage": "https://plinken.org",
+  "source": "Organ.cmajor",
+  "artifact": "dist/organ.wclap.tar.gz",
+  "format": "tar.gz",
+  "has_ui": false,
+  "plugins": [
+    {
+      "id": "com.plinken.organ",
+      "name": "Organ",
+      "features": ["instrument", "synthesizer"],
+      "has_ui": false
+    }
+  ]
+}

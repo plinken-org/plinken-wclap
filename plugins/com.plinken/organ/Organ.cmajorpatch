@@ -1,0 +1,11 @@
+{
+  "CmajorVersion": 1,
+  "ID": "com.plinken.organ",
+  "version": "0.0.1",
+  "name": "Organ",
+  "description": "Hammond-style additive tonewheel organ — 9 drawbars, 8 voices, per-voice ASR.",
+  "manufacturer": "Plinken",
+  "category": "synth",
+  "isInstrument": true,
+  "source": "Organ.cmajor"
+}

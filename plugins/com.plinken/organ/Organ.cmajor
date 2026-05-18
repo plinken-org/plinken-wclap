@@ -1,0 +1,138 @@
+/**
+    Plinken: Organ — Hammond-style additive tonewheel organ.
+
+    Nine drawbars at the classic Hammond harmonic ratios; each voice sums
+    nine sine oscillators scaled by drawbar amplitudes (0..8, where 8 = full
+    bar out). No vibrato/chorus, no key-click, no leakage — just the bones
+    of additive organ tone so the Cmajor → WCLAP pipeline has something to
+    chew on.
+
+    Drawbar pitch  | Harmonic  | Ratio
+    ---------------|-----------|------
+    16'            | sub       | 0.5
+    5 1/3'         | 3rd of 16'| 1.5
+    8'             | fund.     | 1.0
+    4'             | 2nd       | 2.0
+    2 2/3'         | 3rd       | 3.0
+    2'             | 4th       | 4.0
+    1 3/5'         | 5th       | 5.0
+    1 1/3'         | 6th       | 6.0
+    1'             | 8th       | 8.0
+*/
+
+graph Organ  [[main]]
+{
+    input event std::midi::Message midiIn;
+    output stream float out;
+
+    // Graph-level params fan out to every voice. Drawbar range 0..8 is the
+    // physical Hammond drawbar travel — we divide by 8 inside the voice to
+    // get a 0..1 amplitude.
+    input voices.drawbar1  drawbar_16    [[ name: "16'",     min: 0, max: 8, init: 8, step: 1 ]];
+    input voices.drawbar2  drawbar_5_1_3 [[ name: "5 1/3'",  min: 0, max: 8, init: 8, step: 1 ]];
+    input voices.drawbar3  drawbar_8     [[ name: "8'",      min: 0, max: 8, init: 8, step: 1 ]];
+    input voices.drawbar4  drawbar_4     [[ name: "4'",      min: 0, max: 8, init: 0, step: 1 ]];
+    input voices.drawbar5  drawbar_2_2_3 [[ name: "2 2/3'",  min: 0, max: 8, init: 0, step: 1 ]];
+    input voices.drawbar6  drawbar_2     [[ name: "2'",      min: 0, max: 8, init: 0, step: 1 ]];
+    input voices.drawbar7  drawbar_1_3_5 [[ name: "1 3/5'",  min: 0, max: 8, init: 0, step: 1 ]];
+    input voices.drawbar8  drawbar_1_1_3 [[ name: "1 1/3'",  min: 0, max: 8, init: 0, step: 1 ]];
+    input voices.drawbar9  drawbar_1     [[ name: "1'",      min: 0, max: 8, init: 0, step: 1 ]];
+
+    let voiceCount = 8;
+
+    node
+    {
+        voices         = Voice[voiceCount];
+        voiceAllocator = std::voices::VoiceAllocator (voiceCount);
+    }
+
+    connection
+    {
+        midiIn -> std::midi::MPEConverter -> voiceAllocator;
+        voiceAllocator.voiceEventOut -> voices.eventIn;
+        voices -> out;
+    }
+}
+
+//==============================================================================
+// One voice = nine sine oscillators + ASR envelope. Drawbars come in as
+// values; we treat them as gains inside the per-sample sum.
+//==============================================================================
+graph Voice
+{
+    input event (std::notes::NoteOn, std::notes::NoteOff) eventIn;
+    output stream float out;
+
+    input value float drawbar1, drawbar2, drawbar3, drawbar4, drawbar5,
+                      drawbar6, drawbar7, drawbar8, drawbar9;
+
+    node
+    {
+        harmonics = HarmonicFrequencies;
+        envelope  = std::envelopes::FixedASR (0.005f, 0.080f);
+
+        osc1 = std::oscillators::Sine (float32);
+        osc2 = std::oscillators::Sine (float32);
+        osc3 = std::oscillators::Sine (float32);
+        osc4 = std::oscillators::Sine (float32);
+        osc5 = std::oscillators::Sine (float32);
+        osc6 = std::oscillators::Sine (float32);
+        osc7 = std::oscillators::Sine (float32);
+        osc8 = std::oscillators::Sine (float32);
+        osc9 = std::oscillators::Sine (float32);
+    }
+
+    connection
+    {
+        eventIn -> harmonics;
+        eventIn -> envelope.eventIn;
+
+        harmonics.f1 -> osc1.frequencyIn;
+        harmonics.f2 -> osc2.frequencyIn;
+        harmonics.f3 -> osc3.frequencyIn;
+        harmonics.f4 -> osc4.frequencyIn;
+        harmonics.f5 -> osc5.frequencyIn;
+        harmonics.f6 -> osc6.frequencyIn;
+        harmonics.f7 -> osc7.frequencyIn;
+        harmonics.f8 -> osc8.frequencyIn;
+        harmonics.f9 -> osc9.frequencyIn;
+
+        // Drawbar travel 0..8 → amplitude 0..1. Per-voice peak is the sum
+        // of bar amplitudes (max 9.0 with everything pulled), so divide by
+        // 9 to keep us at-or-below unity before the envelope.
+        (envelope.gainOut *
+            ((osc1.out * drawbar1
+            + osc2.out * drawbar2
+            + osc3.out * drawbar3
+            + osc4.out * drawbar4
+            + osc5.out * drawbar5
+            + osc6.out * drawbar6
+            + osc7.out * drawbar7
+            + osc8.out * drawbar8
+            + osc9.out * drawbar9) * (1.0f / 72.0f))) -> out;
+    }
+}
+
+//==============================================================================
+// One NoteOn → nine frequency events, one per drawbar harmonic ratio.
+//==============================================================================
+processor HarmonicFrequencies
+{
+    input event std::notes::NoteOn eventIn;
+    output event float32 f1, f2, f3, f4, f5, f6, f7, f8, f9;
+
+    event eventIn (std::notes::NoteOn e)
+    {
+        let base = std::notes::noteToFrequency (e.pitch);
+
+        f1 <- base * 0.5f;   // 16'
+        f2 <- base * 1.5f;   // 5 1/3'
+        f3 <- base * 1.0f;   // 8'  (fundamental)
+        f4 <- base * 2.0f;   // 4'
+        f5 <- base * 3.0f;   // 2 2/3'
+        f6 <- base * 4.0f;   // 2'
+        f7 <- base * 5.0f;   // 1 3/5'
+        f8 <- base * 6.0f;   // 1 1/3'
+        f9 <- base * 8.0f;   // 1'
+    }
+}
