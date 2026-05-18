@@ -136,6 +136,18 @@
       </ul>
     </section>
 
+    <section class="stack plugins">
+      <div class="stackHeader">PLUGINS</div>
+      <ul>
+        <li><span>auto-pan</span><span>Stereo LFO autopanner — FX</span></li>
+        <li><span>spectrum</span><span>FFT spectrum analyser with live readout — FX</span></li>
+        <li><span>vocal-limiter</span><span>Brick-wall vocal limiter, peak + GR meters — FX</span></li>
+        <li><span>synome</span><span>Mono lead synth — instrument (WIP)</span></li>
+        <li><span>organ</span><span>Hammond-style drawbar organ, 9 bars × 8 voices — instrument</span></li>
+        <li><span>piano</span><span>Stretched-tuning additive piano with stereo spread — instrument</span></li>
+      </ul>
+    </section>
+
     <section class="registry">
       <div class="stackHeader">REGISTRY</div>
       <p class="registryLead">
