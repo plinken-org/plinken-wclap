@@ -56,6 +56,34 @@ Three panels, single SvelteKit route:
   table below; values write straight back to attributes on the
   selected DOM node.
 
+## Framework choice
+
+**V1: vanilla Svelte 5 runes + Pointer Events.** The interactions
+needed (drag from palette, drag to move, 8-handle resize, click-
+select, Esc / Delete) are ~200 lines total. `$state` holds the
+selected widget reference + transform numbers, `$derived` computes
+handle positions, native `pointerdown` / `move` / `up` with
+`setPointerCapture` runs the drag loops. Zero dependency surface,
+fits the rest of `apps/site`'s rune-based code.
+
+**V2 escape hatch: [moveable](https://github.com/daybrush/moveable)**
+(via `svelte-moveable`). Drop-in transform widget that handles
+drag + 8-handle resize + snap-to-grid + alignment guides + aspect-
+lock + rotate + multi-select for ~40 KB minified. Pull it in the
+day any of those features gets requested — most of them are in
+the deferred list above. No design lock-in: both approaches produce
+the same `x` / `y` / `w` / `h` attributes on the widget element, so
+swapping the canvas implementation doesn't touch the output format
+or any other part of the pipeline.
+
+Nothing else in the designer needs a library:
+
+- Palette → Svelte sidebar component
+- Property panel → Svelte component bound to selection state
+- Save → `new Blob([html], { type: 'text/html' })` + `<a download>`
+- Open → `<input type="file">` + `text()` + `DOMParser`
+- Mock conn → plain class in a `.mjs` file
+
 ## Widget composition
 
 Widgets are `HTMLElement` custom elements extending `PlinkenWidget`,
