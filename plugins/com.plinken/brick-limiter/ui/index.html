@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Brick Limiter</title>
+<link rel="stylesheet" href="../widgets/widgets.css">
+<style>
+  .root {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    align-items: center;
+  }
+  /* compact strip: title + small controls + small meters */
+  .root.compact {
+    grid-template-columns: max-content 1fr max-content;
+    gap: 8px;
+    padding: 0 10px;
+    --fader-h: 36px;
+    --fader-thumb: 14px;
+    --meter-w: 8px;
+    --meter-h: 36px;
+    --toggle-w: 28px;
+    --toggle-h: 14px;
+  }
+  .root.compact .title { font-size: 0.65rem; }
+  .root.compact .controls { gap: 12px; }
+  .root.compact .meters { gap: 6px; }
+  .root.compact .fader-label,
+  .root.compact .fader-readout,
+  .root.compact .toggle-label,
+  .root.compact .meter-stack .label,
+  .root.compact .meter-stack .readout { display: none; }
+
+  /* expanded panel: faders + toggle on top, meters on right */
+  .root.expanded {
+    grid-template-rows: auto 1fr;
+    padding: 14px 18px;
+    gap: 12px;
+    --fader-h: 140px;
+    --fader-thumb: 22px;
+    --meter-w: 14px;
+    --meter-h: 140px;
+  }
+  .root.expanded .title {
+    text-align: center;
+    font-size: 0.78rem;
+  }
+  .root.expanded .body {
+    display: flex;
+    align-items: flex-start;
+    gap: 24px;
+    justify-content: flex-start;
+  }
+  .root.expanded .controls {
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
+  }
+  .root.expanded .meters {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    border-left: 1px solid var(--border-soft);
+    padding-left: 18px;
+  }
+
+  .controls {
+    display: flex;
+    align-items: flex-start;
+  }
+  .meters {
+    display: flex;
+    align-items: flex-start;
+  }
+</style>
+</head>
+<body>
+<div class="root expanded" id="root">
+  <div class="title">Brick Limiter</div>
+  <div class="body">
+    <div class="controls">
+      <div id="ctrl-threshold"></div>
+      <div id="ctrl-release"></div>
+      <div id="ctrl-link"></div>
+      <div id="ctrl-output"></div>
+    </div>
+    <div class="meters">
+      <div id="meter-peak"></div>
+      <div id="meter-gr"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { Fader } from '../widgets/fader.mjs';
+  import { Toggle } from '../widgets/toggle.mjs';
+  import { Pot } from '../widgets/pot.mjs';
+  import { Meter } from '../widgets/meter.mjs';
+  import { Transport } from '../widgets/transport.mjs';
+
+  // Param IDs — must match plugins/com.plinken/brick-limiter/src/lib.rs
+  const PID_THRESHOLD = 0x0001;
+  const PID_RELEASE = 0x0002;
+  const PID_STEREO_LINK = 0x0003;
+  const PID_OUTPUT_TRIM = 0x0004;
+  const METER_PEAK_ID = 0x1000;
+  const METER_GR_ID = 0x1001;
+
+  const transport = new Transport();
+
+  const threshold = new Fader(
+    document.getElementById('ctrl-threshold'),
+    {
+      id: PID_THRESHOLD,
+      min: -40, max: 0, default: -1.0,
+      unit: 'dB',
+      label: 'Threshold',
+    }
+  );
+
+  const release = new Fader(
+    document.getElementById('ctrl-release'),
+    {
+      id: PID_RELEASE,
+      min: 10, max: 500, default: 50,
+      log: true,
+      unit: 'ms',
+      label: 'Release',
+      format: v => `${Math.round(v)} ms`,
+    }
+  );
+
+  const link = new Toggle(
+    document.getElementById('ctrl-link'),
+    { id: PID_STEREO_LINK, default: 1, label: 'Link' }
+  );
+
+  // Output trim — post-stage gain. Pull to floor to mute the plugin's
+  // output entirely; useful for checking whether audio you're hearing
+  // is actually coming through the plugin.
+  const output = new Pot(
+    document.getElementById('ctrl-output'),
+    {
+      id: PID_OUTPUT_TRIM,
+      min: -60, max: 12, default: 0,
+      unit: 'dB',
+      label: 'Output',
+      format: v => (v <= -59.99 ? '−∞' : `${v.toFixed(1)} dB`),
+    }
+  );
+
+  for (const ctrl of [threshold, release, link, output]) {
+    ctrl.onChange((v, id) => transport.sendSet(id, v));
+  }
+
+  const peak = new Meter(
+    document.getElementById('meter-peak'),
+    { mode: 'peak', minDb: -60, maxDb: 0, hotDb: -6, clipDb: -0.5, label: 'Peak' }
+  );
+  const gr = new Meter(
+    document.getElementById('meter-gr'),
+    { mode: 'gr', minDb: -24, maxDb: 0, label: 'GR' }
+  );
+  peak.setDb(-Infinity);
+  gr.setDb(0);
+
+  const widgets = new Map([
+    [PID_THRESHOLD, threshold],
+    [PID_RELEASE, release],
+    [PID_STEREO_LINK, link],
+    [PID_OUTPUT_TRIM, output],
+  ]);
+  transport.onSnapshot(params => {
+    for (const [id, value] of params) {
+      const w = widgets.get(id);
+      if (w) {
+        w.setValueFromHost(value);
+        continue;
+      }
+      if (id === METER_PEAK_ID) peak.setDb(value);
+      else if (id === METER_GR_ID) gr.setDb(value);
+    }
+  });
+  transport.sendReady();
+
+  function applyLayout() {
+    const root = document.getElementById('root');
+    const compact = window.innerWidth < 320 || window.innerHeight < 90;
+    root.classList.toggle('compact', compact);
+    root.classList.toggle('expanded', !compact);
+  }
+  applyLayout();
+  window.addEventListener('resize', applyLayout);
+</script>
+</body>
+</html>

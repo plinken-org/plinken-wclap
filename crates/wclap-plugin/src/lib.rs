@@ -167,6 +167,7 @@ const EXT_NOTE_PORTS: &[u8] = b"clap.note-ports\0";
 const EXT_WEBVIEW: &[u8] = b"clap.webview/3\0";
 const EXT_PARAMS: &[u8] = b"clap.params\0";
 const EXT_LATENCY: &[u8] = b"clap.latency\0";
+const EXT_STATE: &[u8] = b"clap.state\0";
 
 /// CLAP param-info flag bits (subset).
 pub const PARAM_IS_STEPPED: u32 = 1 << 0;
@@ -522,6 +523,15 @@ static mut PARAMS_EXT: ParamsExt = ParamsExt {
 };
 static mut LATENCY_EXT: LatencyExt = LatencyExt { get: 0 };
 
+/// `wclap_plugin_state` — two fn ptrs, save + load (clap.rs `state` module
+/// in the host mirrors this layout).
+#[repr(C)]
+struct StateExt {
+    save: u32,
+    load: u32,
+}
+static mut STATE_EXT: StateExt = StateExt { save: 0, load: 0 };
+
 // Room for up to 8 features. More than enough for any plugin we'll ship.
 const MAX_FEATURES: usize = 8;
 static mut FEATURES_TABLE: [u32; MAX_FEATURES + 1] = [0; MAX_FEATURES + 1];
@@ -671,6 +681,13 @@ pub fn init_plugin<P: Plugin>(def: &'static PluginDef) {
         // clap.latency is unconditionally exposed; plugins that don't
         // override `latency_samples()` simply report 0.
         LATENCY_EXT.get = latency_get as usize as u32;
+
+        // clap.state — generic param-dump persistence (save = every declared
+        // param's (id, value); load = replay via set_param). Exposed whenever
+        // the plugin has params; plugins with richer internal state can get a
+        // bespoke path later without breaking this blob (it's versioned).
+        STATE_EXT.save = state_save as usize as u32;
+        STATE_EXT.load = state_load as usize as u32;
 
         let params_slice = P::params();
         DEF.params_ptr = params_slice.as_ptr();
@@ -1045,6 +1062,12 @@ extern "C" fn plugin_get_extension(_plugin_ptr: u32, ext_id_ptr: u32) -> u32 {
             return addr_of!(PARAMS_EXT) as u32;
         }
     }
+    if cstr_eq(ext_id_ptr, EXT_STATE) {
+        // Param-dump state only makes sense with params.
+        if unsafe { DEF.params_len > 0 } {
+            return addr_of!(STATE_EXT) as u32;
+        }
+    }
     if cstr_eq(ext_id_ptr, EXT_LATENCY) {
         // Always exposed — plugins default to 0 samples if they don't
         // override `latency_samples()`, which is the right answer for
@@ -1228,10 +1251,26 @@ extern "C" fn webview_get_resource(
 /// the auto-pan / vocal-* UIs (see widgets/cbor.mjs). Anything else is
 /// silently dropped — extending the protocol means adding parsers here.
 extern "C" fn webview_receive(plugin_ptr: u32, buf_ptr: u32, size: u32) -> u32 {
+    let p = buf_ptr as *const u8;
+    // Ready: text(5) "ready" — the UI just (re)opened on its hardcoded
+    // defaults. Reply with a full param snapshot ({params:{id:value}})
+    // so it reflects the plugin's ACTUAL state (possibly restored from
+    // the project via clap.state). The widget transport's
+    // decodeParamsSnapshot consumes exactly this shape.
+    if size == 6 {
+        unsafe {
+            if *p == 0x65
+                && *p.add(1) == b'r' && *p.add(2) == b'e' && *p.add(3) == b'a'
+                && *p.add(4) == b'd' && *p.add(5) == b'y'
+            {
+                push_params_snapshot(plugin_ptr);
+                return 1;
+            }
+        }
+    }
     if size < 20 {
         return 1;
     }
-    let p = buf_ptr as *const u8;
     unsafe {
         // 0xa1 = map(1)
         if *p != 0xa1 {
@@ -1399,4 +1438,146 @@ fn _keep_alive() {
     let _ = addr_of_mut!(FEATURES_TABLE);
     let _ = addr_of_mut!(DEF);
     let _ = addr_of_mut!(VTABLE);
+}
+
+// ---------------------------------------------------------------------------
+// clap.state — generic param-dump persistence. Save serializes every
+// declared param's (id, value); load replays the pairs through set_param.
+// Every plugin built on this crate gets project-persistent knob state for
+// free. Blob layout (all little-endian):
+//   u32 magic "PLST" · u32 version (1) · u32 count · count × (u32 id, f64 value)
+// Unknown ids on load are still forwarded to set_param, which ignores
+// them — so older blobs survive param-surface growth.
+// ---------------------------------------------------------------------------
+
+const STATE_MAGIC: u32 = 0x504c_5354; // "PLST"
+
+/// `clap_ostream.write` / `clap_istream.read` — host-stub fn ptr at +4,
+/// called as `(stream*, buf*, u64 size) -> i64`.
+type StreamIoFn = extern "C" fn(stream: u32, buf: u32, size: u64) -> i64;
+
+unsafe fn stream_io_fn(stream_ptr: u32) -> Option<StreamIoFn> {
+    let idx = read_u32(stream_ptr + 4);
+    if idx == 0 {
+        return None;
+    }
+    Some(core::mem::transmute::<usize, StreamIoFn>(idx as usize))
+}
+
+extern "C" fn state_save(plugin_ptr: u32, ostream_ptr: u32) -> u32 {
+    unsafe {
+        let Some(write) = stream_io_fn(ostream_ptr) else { return 0 };
+        let Some(get) = VTABLE.get_param else { return 0 };
+        let data = read_plugin_data(plugin_ptr);
+        let n = DEF.params_len;
+        let mut buf: alloc::vec::Vec<u8> =
+            alloc::vec::Vec::with_capacity(12 + n as usize * 12);
+        buf.extend_from_slice(&STATE_MAGIC.to_le_bytes());
+        buf.extend_from_slice(&1u32.to_le_bytes());
+        buf.extend_from_slice(&n.to_le_bytes());
+        for i in 0..n {
+            let Some(def) = param_def(i) else { continue };
+            buf.extend_from_slice(&def.id.to_le_bytes());
+            buf.extend_from_slice(&get(data, def.id).to_le_bytes());
+        }
+        let mut off = 0usize;
+        while off < buf.len() {
+            let w = write(
+                ostream_ptr,
+                buf.as_ptr().add(off) as u32,
+                (buf.len() - off) as u64,
+            );
+            if w <= 0 {
+                return 0;
+            }
+            off += w as usize;
+        }
+    }
+    1
+}
+
+unsafe fn stream_read_exact(read: StreamIoFn, istream_ptr: u32, out: &mut [u8]) -> bool {
+    let mut off = 0usize;
+    while off < out.len() {
+        let r = read(
+            istream_ptr,
+            out.as_mut_ptr().add(off) as u32,
+            (out.len() - off) as u64,
+        );
+        if r <= 0 {
+            return false;
+        }
+        off += r as usize;
+    }
+    true
+}
+
+extern "C" fn state_load(plugin_ptr: u32, istream_ptr: u32) -> u32 {
+    unsafe {
+        let Some(read) = stream_io_fn(istream_ptr) else { return 0 };
+        let Some(set) = VTABLE.set_param else { return 0 };
+        let data = read_plugin_data(plugin_ptr);
+        let mut hdr = [0u8; 12];
+        if !stream_read_exact(read, istream_ptr, &mut hdr) {
+            return 0;
+        }
+        let magic = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]);
+        let version = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]);
+        let count = u32::from_le_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]);
+        if magic != STATE_MAGIC || version != 1 {
+            return 0;
+        }
+        // 4096-param ceiling — a corrupt count can't spin us forever.
+        let mut pair = [0u8; 12];
+        for _ in 0..count.min(4096) {
+            if !stream_read_exact(read, istream_ptr, &mut pair) {
+                return 0;
+            }
+            let id = u32::from_le_bytes([pair[0], pair[1], pair[2], pair[3]]);
+            let value = f64::from_le_bytes([
+                pair[4], pair[5], pair[6], pair[7], pair[8], pair[9], pair[10], pair[11],
+            ]);
+            set(data, id, value);
+        }
+    }
+    1
+}
+
+/// Push the full param surface to the plugin's UI as a CBOR
+/// `{params:{<id>:<f64>, …}}` snapshot via `clap_host_webview.send`.
+/// No-op when the host didn't expose the webview ext or there are no
+/// params. Map header uses the short form (≤23 entries) or the 1-byte
+/// length form (≤255).
+fn push_params_snapshot(plugin_ptr: u32) {
+    unsafe {
+        let host = DEF.host_ptr;
+        let send_idx = DEF.host_webview_send;
+        let n = DEF.params_len;
+        let Some(get) = VTABLE.get_param else { return };
+        if host == 0 || send_idx == 0 || n == 0 || n > 255 {
+            return;
+        }
+        let data = read_plugin_data(plugin_ptr);
+        let mut buf: alloc::vec::Vec<u8> =
+            alloc::vec::Vec::with_capacity(10 + n as usize * 14);
+        buf.push(0xa1);
+        buf.push(0x66);
+        buf.extend_from_slice(b"params");
+        if n <= 23 {
+            buf.push(0xa0 | (n as u8));
+        } else {
+            buf.push(0xb8);
+            buf.push(n as u8);
+        }
+        for i in 0..n {
+            let Some(def) = param_def(i) else { continue };
+            buf.push(0x1a);
+            buf.extend_from_slice(&def.id.to_be_bytes());
+            buf.push(0xfb);
+            buf.extend_from_slice(&get(data, def.id).to_be_bytes());
+        }
+        type Send = extern "C" fn(host: u32, buf: u32, size: u32) -> u32;
+        let f: Send = core::mem::transmute(send_idx as usize);
+        f(host, buf.as_ptr() as u32, buf.len() as u32);
+    }
 }

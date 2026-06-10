@@ -94,6 +94,7 @@
 
 <script type="module">
   import { Fader } from '../widgets/fader.mjs';
+  import { Transport } from '../widgets/transport.mjs';
 
   // Param ids = the cmaj endpoint handles the shim exposes via
   // clap.params. Source of truth: Piano.cmajor input declaration order
@@ -105,6 +106,7 @@
   ];
 
   const knobsEl = document.getElementById('knobs');
+  const widgets = new Map();
   for (const p of PARAMS) {
     const col = document.createElement('div');
     col.className = 'knob-col';
@@ -126,9 +128,18 @@
     f.onChange((v, id) => {
       window.parent.postMessage(encodeSet(id, v), '*');
     });
+    widgets.set(p.id, f);
     knobsEl.appendChild(col);
   }
 
+  // Ready handshake: the plugin replies with a param snapshot so the
+  // knobs reflect its actual (possibly project-restored) state.
+  const transport = new Transport();
+  transport.onSnapshot((params) => {
+    for (const [id, value] of params) {
+      widgets.get(id)?.setValueFromHost(value);
+    }
+  });
   Promise.resolve().then(() => {
     window.parent.postMessage(encodeReady(), '*');
   });

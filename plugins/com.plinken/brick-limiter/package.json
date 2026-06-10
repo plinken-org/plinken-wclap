@@ -1,0 +1,11 @@
+{
+  "name": "@plinken/brick-limiter",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Plinken lookahead brickwall limiter (com.plinken)",
+  "scripts": {
+    "build:wasm": "cargo build -p com-plinken-brick-limiter --target wasm32-unknown-unknown --release && mkdir -p dist && cp ../../../target/wasm32-unknown-unknown/release/com_plinken_brick_limiter.wasm dist/brick-limiter.wclap.wasm",
+    "build": "pnpm run build:wasm && node ../../../scripts/bundle-wclap.mjs ."
+  }
+}

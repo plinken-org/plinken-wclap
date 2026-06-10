@@ -1,19 +1,19 @@
 {
   "manifest_version": 1,
-  "id": "com.plinken.vocal-limiter",
-  "name": "Vocal Limiter",
+  "id": "com.plinken.brick-limiter",
+  "name": "Brick Limiter",
   "vendor": "Plinken",
-  "version": "0.1.2",
-  "description": "Zero-latency feed-back peak limiter for tracking and vocals. No lookahead \u2014 safe in a recording/monitoring chain.",
+  "version": "0.0.3",
+  "description": "Lookahead brickwall peak limiter (2 ms lookahead \u2014 adds latency; use on buses/master, not for tracking).",
   "features": [
     "audio-effect",
     "limiter",
-    "vocal"
+    "mastering"
   ],
   "license": "MIT",
   "homepage": "https://plinken.org",
   "source": "src/",
-  "artifact": "dist/vocal-limiter.wclap.tar.gz",
+  "artifact": "dist/brick-limiter.wclap.tar.gz",
   "format": "tar.gz",
   "has_ui": true,
   "ui": {
@@ -28,12 +28,12 @@
   },
   "plugins": [
     {
-      "id": "com.plinken.vocal-limiter",
-      "name": "Vocal Limiter",
+      "id": "com.plinken.brick-limiter",
+      "name": "Brick Limiter",
       "features": [
         "audio-effect",
         "limiter",
-        "vocal"
+        "mastering"
       ],
       "has_ui": true
     }

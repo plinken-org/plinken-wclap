@@ -92,6 +92,13 @@
 
 #define CLAP_EXT_WEBVIEW_V3 "clap.webview/3"
 
+// clap_host_webview (draft v3) — single fn ptr the plugin calls to push
+// bytes to its UI iframe. Layout pinned to wclap-host's `host_webview`
+// module (send at offset 0).
+struct clap_host_webview_t {
+    bool (*send)(const clap_host_t* host, const void* buf, uint32_t size);
+};
+
 // ---- Plugin descriptor ------------------------------------------------------
 
 namespace {
@@ -168,6 +175,8 @@ struct PluginInstance {
     double          sampleRate = 48000.0;
     bool            initialised = false;
     float           paramValues[kParamCount + 1] = {};
+    const clap_host_t*         host        = nullptr;
+    const clap_host_webview_t* hostWebview = nullptr;
 };
 
 constexpr uint32_t kOutChannels = CMAJ_CLASS_NAME::numAudioOutputChannels;
@@ -323,6 +332,74 @@ const clap_plugin_params_t kParamsExt = {
     .flush          = params_flush,
 };
 
+
+// ---- State extension ---------------------------------------------------------
+// Generic param-dump persistence, mirroring crates/wclap-plugin: the host
+// saves every param's (id, value) pair and replays them on load. Blob
+// (little-endian): u32 magic "PLST" | u32 version=1 | u32 count |
+// count x (u32 id, f64 value). Unknown ids on load are skipped, so older
+// blobs survive param-surface growth.
+
+static constexpr uint32_t kStateMagic = 0x504c5354u; // "PLST"
+
+bool state_save(const clap_plugin_t* p, const clap_ostream_t* stream) {
+    auto& s = *self(p);
+    const uint32_t header[3] = { kStateMagic, 1u, kParamCount };
+    uint8_t buf[sizeof(header) + kParamCount * 12];
+    std::memcpy(buf, header, sizeof(header));
+    uint8_t* w = buf + sizeof(header);
+    for (uint32_t i = 0; i < kParamCount; ++i) {
+        const uint32_t id = kParams[i].handle;
+        const double v = double(s.paramValues[i]);
+        std::memcpy(w, &id, 4); w += 4;
+        std::memcpy(w, &v, 8); w += 8;
+    }
+    uint64_t total = uint64_t(w - buf);
+    uint64_t off = 0;
+    while (off < total) {
+        const int64_t n = stream->write(stream, buf + off, total - off);
+        if (n <= 0) return false;
+        off += uint64_t(n);
+    }
+    return true;
+}
+
+static bool stream_read_exact(const clap_istream_t* stream, uint8_t* out, uint64_t len) {
+    uint64_t off = 0;
+    while (off < len) {
+        const int64_t n = stream->read(stream, out + off, len - off);
+        if (n <= 0) return false;
+        off += uint64_t(n);
+    }
+    return true;
+}
+
+bool state_load(const clap_plugin_t* p, const clap_istream_t* stream) {
+    auto& s = *self(p);
+    uint8_t hdr[12];
+    if (!stream_read_exact(stream, hdr, sizeof(hdr))) return false;
+    uint32_t magic, version, count;
+    std::memcpy(&magic, hdr, 4);
+    std::memcpy(&version, hdr + 4, 4);
+    std::memcpy(&count, hdr + 8, 4);
+    if (magic != kStateMagic || version != 1) return false;
+    if (count > 4096) return false; // corrupt-count guard
+    for (uint32_t i = 0; i < count; ++i) {
+        uint8_t pair[12];
+        if (!stream_read_exact(stream, pair, sizeof(pair))) return false;
+        uint32_t id; double v;
+        std::memcpy(&id, pair, 4);
+        std::memcpy(&v, pair + 4, 8);
+        apply_param(s, id, float(v)); // unknown ids no-op inside
+    }
+    return true;
+}
+
+const clap_plugin_state_t kStateExt = {
+    .save = state_save,
+    .load = state_load,
+};
+
 // ---- Webview extension ------------------------------------------------------
 
 #if WCLAP_HAS_UI
@@ -389,11 +466,45 @@ bool webview_receive(const clap_plugin_t* p, const void* buf, uint32_t size) {
     if (!buf) return false;
     const uint8_t* b = static_cast<const uint8_t*>(buf);
 
-    // Ready: text(5) "ready" — 6 bytes. We accept and ignore; if a
-    // future plugin needs to push initial state it can call
-    // host_webview.send here.
+    // Ready: text(5) "ready" — 6 bytes. The UI just (re)opened and is
+    // showing its hardcoded defaults; reply with a full param snapshot
+    // so it reflects the plugin's ACTUAL state (which may have been
+    // restored from the project via clap.state).
     if (size == 6 && b[0] == 0x65 && b[1]=='r' && b[2]=='e'
         && b[3]=='a' && b[4]=='d' && b[5]=='y') {
+        auto& s = *self(p);
+        if (!s.hostWebview && s.host && s.host->get_extension) {
+            s.hostWebview = static_cast<const clap_host_webview_t*>(
+                s.host->get_extension(s.host, CLAP_EXT_WEBVIEW_V3));
+        }
+        if (s.hostWebview && s.hostWebview->send) {
+            // CBOR {params:{<id>:<f64>, ...}} — the shape the widget
+            // transport's decodeParamsSnapshot expects. Map header:
+            // short form for <=23 params, 1-byte-length form above.
+            static_assert(kParamCount <= 255, "snapshot encoder caps at 255 params");
+            uint8_t snap[2 + 6 + 2 + kParamCount * 14];
+            uint32_t i = 0;
+            snap[i++] = 0xa1;
+            snap[i++] = 0x66;
+            std::memcpy(snap + i, "params", 6); i += 6;
+            if (kParamCount <= 23) {
+                snap[i++] = uint8_t(0xa0 | kParamCount);
+            } else {
+                snap[i++] = 0xb8;
+                snap[i++] = uint8_t(kParamCount);
+            }
+            for (uint32_t k = 0; k < kParamCount; ++k) {
+                snap[i++] = 0x1a;
+                const uint32_t id = kParams[k].handle;
+                snap[i++] = uint8_t(id >> 24); snap[i++] = uint8_t(id >> 16);
+                snap[i++] = uint8_t(id >> 8);  snap[i++] = uint8_t(id);
+                snap[i++] = 0xfb;
+                double v = double(s.paramValues[k]);
+                uint64_t bits; std::memcpy(&bits, &v, 8);
+                for (int sh = 56; sh >= 0; sh -= 8) snap[i++] = uint8_t(bits >> sh);
+            }
+            s.hostWebview->send(s.host, snap, i);
+        }
         return true;
     }
     // Set: 20-byte fixed layout, big-endian:
@@ -596,6 +707,7 @@ const void* plugin_get_extension(const clap_plugin_t*, const char* id) {
     if (!std::strcmp(id, CLAP_EXT_AUDIO_PORTS)) return &kAudioPortsExt;
     if (!std::strcmp(id, CLAP_EXT_NOTE_PORTS))  return &kNotePortsExt;
     if (!std::strcmp(id, CLAP_EXT_PARAMS) && kParamCount > 0) return &kParamsExt;
+    if (!std::strcmp(id, CLAP_EXT_STATE)  && kParamCount > 0) return &kStateExt;
 #if WCLAP_HAS_UI
     if (!std::strcmp(id, CLAP_EXT_WEBVIEW_V3)) return &kWebviewExt;
 #endif
@@ -614,12 +726,13 @@ factory_get_plugin_descriptor(const clap_plugin_factory_t*, uint32_t index) {
 }
 
 const clap_plugin_t*
-factory_create_plugin(const clap_plugin_factory_t*, const clap_host_t*,
+factory_create_plugin(const clap_plugin_factory_t*, const clap_host_t* host,
                       const char* plugin_id) {
     if (!plugin_id || std::strcmp(plugin_id, kDescriptor.id) != 0) return nullptr;
 
     void* mem = ::operator new(sizeof(PluginInstance));
     auto* inst = new (mem) PluginInstance{};
+    inst->host = host;
     inst->plugin = {};
     inst->plugin.desc            = &kDescriptor;
     inst->plugin.plugin_data     = inst;

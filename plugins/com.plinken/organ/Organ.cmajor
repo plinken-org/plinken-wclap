@@ -23,7 +23,7 @@
 graph Organ  [[main]]
 {
     input event std::midi::Message midiIn;
-    output stream float out;
+    output stream float<2> out;
 
     // Graph-level params fan out to every voice. Drawbar range 0..8 is the
     // physical Hammond drawbar travel — the voice sums osc.out * drawbar and
@@ -80,7 +80,7 @@ graph Organ  [[main]]
 graph Voice
 {
     input event (std::notes::NoteOn, std::notes::NoteOff) eventIn;
-    output stream float out;
+    output stream float<2> out;
 
     input value float drawbar1, drawbar2, drawbar3, drawbar4, drawbar5,
                       drawbar6, drawbar7, drawbar8, drawbar9;
@@ -116,19 +116,36 @@ graph Voice
         harmonics.f8 -> osc8.frequencyIn;
         harmonics.f9 -> osc9.frequencyIn;
 
-        // Drawbar travel 0..8 → amplitude 0..1. Per-voice peak is the sum
-        // of bar amplitudes (max 9.0 with everything pulled), so divide by
-        // 9 to keep us at-or-below unity before the envelope.
-        (envelope.gainOut *
-            ((osc1.out * drawbar1
-            + osc2.out * drawbar2
-            + osc3.out * drawbar3
-            + osc4.out * drawbar4
-            + osc5.out * drawbar5
-            + osc6.out * drawbar6
-            + osc7.out * drawbar7
-            + osc8.out * drawbar8
-            + osc9.out * drawbar9) * (1.0f / 72.0f))) -> out;
+        // Drawbar travel 0..8 → amplitude 0..1, then a per-drawbar
+        // constant-power pan. Sub (16') and fundamental (8') sit dead
+        // centre so the low end stays mono-safe; upper harmonics spread
+        // alternately L/R, wider as they go up — the spatial feel of a
+        // tonewheel cabinet without modulation. Constant-power pairs are
+        // cos/sin of θ = (pan+1)·π/4 for pan ∈ {0, ±0.3, ±0.5, ±0.7}:
+        //   centre 0.7071/0.7071 · ±0.3 0.8526/0.5225 ·
+        //   ±0.5 0.9239/0.3827 · ±0.7 0.9724/0.2334
+        // Peak per channel with all bars out: 8·Σg/72 ≈ 0.67 < 1.
+        (envelope.gainOut * float<2> (
+            (osc1.out * drawbar1 * 0.7071f      // 16'    centre
+            + osc2.out * drawbar2 * 0.8526f     // 5 1/3' L 0.3
+            + osc3.out * drawbar3 * 0.7071f     // 8'     centre
+            + osc4.out * drawbar4 * 0.5225f     // 4'     R 0.3
+            + osc5.out * drawbar5 * 0.9239f     // 2 2/3' L 0.5
+            + osc6.out * drawbar6 * 0.3827f     // 2'     R 0.5
+            + osc7.out * drawbar7 * 0.9724f     // 1 3/5' L 0.7
+            + osc8.out * drawbar8 * 0.2334f     // 1 1/3' R 0.7
+            + osc9.out * drawbar9 * 0.7071f)    // 1'     centre
+                * (1.0f / 72.0f),
+            (osc1.out * drawbar1 * 0.7071f
+            + osc2.out * drawbar2 * 0.5225f
+            + osc3.out * drawbar3 * 0.7071f
+            + osc4.out * drawbar4 * 0.8526f
+            + osc5.out * drawbar5 * 0.3827f
+            + osc6.out * drawbar6 * 0.9239f
+            + osc7.out * drawbar7 * 0.2334f
+            + osc8.out * drawbar8 * 0.9724f
+            + osc9.out * drawbar9 * 0.7071f)
+                * (1.0f / 72.0f))) -> out;
     }
 }
 

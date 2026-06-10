@@ -118,6 +118,7 @@
 
 <script type="module">
   import { Fader } from '../widgets/fader.mjs';
+  import { Transport } from '../widgets/transport.mjs';
 
   // Param ids = the cmaj endpoint handles the shim exposes via
   // clap.params. Source of truth: Organ.cmajor input declaration order
@@ -175,9 +176,16 @@
     barsEl.appendChild(col);
   }
 
-  // Ready handshake — purely advisory. cmaj plugins don't push back an
-  // initial snapshot today; the UI's hardcoded defaults already match
-  // the patch's `init:` annotations.
+  // Ready handshake: the plugin replies with a full param snapshot
+  // ({params:{id:value}}) so the drawbars reflect its ACTUAL state —
+  // which may have been restored from the project (clap.state) and
+  // differ from the hardcoded defaults.
+  const transport = new Transport();
+  transport.onSnapshot((params) => {
+    for (const [id, value] of params) {
+      widgets.get(id)?.setValueFromHost(value);
+    }
+  });
   Promise.resolve().then(() => {
     window.parent.postMessage(encodeReady(), '*');
   });
