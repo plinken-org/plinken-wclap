@@ -1,0 +1,11 @@
+{
+  "name": "@plinken/chorus",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Plinken stereo chorus (com.plinken)",
+  "scripts": {
+    "build:wasm": "cargo build -p com-plinken-chorus --target wasm32-unknown-unknown --release && mkdir -p dist && cp ../../../target/wasm32-unknown-unknown/release/com_plinken_chorus.wasm dist/chorus.wclap.wasm",
+    "build": "pnpm run build:wasm && node ../../../scripts/bundle-wclap.mjs ."
+  }
+}

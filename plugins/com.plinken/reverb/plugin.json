@@ -1,0 +1,39 @@
+{
+  "manifest_version": 1,
+  "id": "com.plinken.reverb",
+  "name": "Reverb",
+  "vendor": "Plinken",
+  "version": "0.1.0",
+  "description": "Freeverb-style algorithmic stereo reverb with decay (size), damping, pre-delay, stereo width, and dry/wet mix.",
+  "features": [
+    "audio-effect",
+    "reverb"
+  ],
+  "license": "MIT",
+  "homepage": "https://plinken.org",
+  "source": "src/",
+  "artifact": "dist/reverb.wclap.tar.gz",
+  "format": "tar.gz",
+  "has_ui": true,
+  "ui": {
+    "compact_size": {
+      "width": 360,
+      "height": 56
+    },
+    "expanded_size": {
+      "width": 460,
+      "height": 200
+    }
+  },
+  "plugins": [
+    {
+      "id": "com.plinken.reverb",
+      "name": "Reverb",
+      "features": [
+        "audio-effect",
+        "reverb"
+      ],
+      "has_ui": true
+    }
+  ]
+}

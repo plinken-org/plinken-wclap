@@ -47,6 +47,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "com-plinken-chorus"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+]
+
+[[package]]
+name = "com-plinken-compressor"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+]
+
+[[package]]
+name = "com-plinken-delay"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+]
+
+[[package]]
+name = "com-plinken-eq"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+]
+
+[[package]]
+name = "com-plinken-reverb"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+]
+
+[[package]]
+name = "com-plinken-saturator"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+]
+
+[[package]]
 name = "com-plinken-spectrum"
 version = "0.0.1"
 dependencies = [

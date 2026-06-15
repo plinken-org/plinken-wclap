@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Parametric EQ</title>
+<link rel="stylesheet" href="../widgets/widgets.css">
+<style>
+  .root { width: 100%; height: 100%; box-sizing: border-box; display: grid; align-items: center; }
+  .root.expanded { grid-template-rows: auto 1fr; padding: 12px 16px; gap: 8px; }
+  .root.expanded .title { text-align: center; font-size: 0.78rem; }
+  .body { display: flex; align-items: stretch; gap: 14px; justify-content: center; }
+  .band {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 0 12px;
+  }
+  .band + .band { border-left: 1px solid var(--border-soft); }
+  .band-name { font-size: 0.6rem; color: var(--text-dim); letter-spacing: 0.04em; }
+  .band-pots { display: flex; align-items: flex-start; gap: 10px; }
+  .meters { display: flex; align-items: flex-start; padding-left: 14px; border-left: 1px solid var(--border-soft); }
+
+  .root.compact {
+    grid-template-columns: 1fr max-content; gap: 6px; padding: 0 8px;
+    --pot-size: 28px; --meter-w: 7px; --meter-h: 34px;
+  }
+  .root.compact .title { display: none; }
+  .root.compact .band { padding: 0 6px; gap: 2px; }
+  .root.compact .band-name { display: none; }
+  .root.compact .band-pots { gap: 6px; }
+  .root.compact .pot-label, .root.compact .pot-readout,
+  .root.compact .meter-stack .label, .root.compact .meter-stack .readout { display: none; }
+</style>
+</head>
+<body>
+<div class="root expanded" id="root">
+  <div class="title">Parametric EQ</div>
+  <div class="body">
+    <div class="band">
+      <div class="band-name">LOW SHELF</div>
+      <div class="band-pots"><div id="ls-freq"></div><div id="ls-gain"></div></div>
+    </div>
+    <div class="band">
+      <div class="band-name">LO-MID</div>
+      <div class="band-pots"><div id="p1-freq"></div><div id="p1-gain"></div><div id="p1-q"></div></div>
+    </div>
+    <div class="band">
+      <div class="band-name">HI-MID</div>
+      <div class="band-pots"><div id="p2-freq"></div><div id="p2-gain"></div><div id="p2-q"></div></div>
+    </div>
+    <div class="band">
+      <div class="band-name">HIGH SHELF</div>
+      <div class="band-pots"><div id="hs-freq"></div><div id="hs-gain"></div></div>
+    </div>
+    <div class="meters"><div id="meter-peak"></div></div>
+  </div>
+</div>
+
+<script type="module">
+  import { Pot } from '../widgets/pot.mjs';
+  import { Meter } from '../widgets/meter.mjs';
+  import { Transport } from '../widgets/transport.mjs';
+
+  // Param IDs — must match plugins/com.plinken/eq/src/lib.rs
+  const PID = {
+    LS_FREQ: 0x0001, LS_GAIN: 0x0002,
+    P1_FREQ: 0x0003, P1_GAIN: 0x0004, P1_Q: 0x0005,
+    P2_FREQ: 0x0006, P2_GAIN: 0x0007, P2_Q: 0x0008,
+    HS_FREQ: 0x0009, HS_GAIN: 0x000A,
+  };
+  const METER_PEAK_ID = 0x1000;
+  const transport = new Transport();
+
+  const hz = v => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)}`;
+  const dB = v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
+  const q = v => v.toFixed(2);
+
+  const pots = {
+    [PID.LS_FREQ]: new Pot(document.getElementById('ls-freq'), { id: PID.LS_FREQ, min: 20, max: 400, default: 100, log: true, unit: 'Hz', label: 'Freq', format: hz }),
+    [PID.LS_GAIN]: new Pot(document.getElementById('ls-gain'), { id: PID.LS_GAIN, min: -18, max: 18, default: 0, unit: 'dB', label: 'Gain', format: dB }),
+    [PID.P1_FREQ]: new Pot(document.getElementById('p1-freq'), { id: PID.P1_FREQ, min: 80, max: 2000, default: 400, log: true, unit: 'Hz', label: 'Freq', format: hz }),
+    [PID.P1_GAIN]: new Pot(document.getElementById('p1-gain'), { id: PID.P1_GAIN, min: -18, max: 18, default: 0, unit: 'dB', label: 'Gain', format: dB }),
+    [PID.P1_Q]: new Pot(document.getElementById('p1-q'), { id: PID.P1_Q, min: 0.3, max: 6, default: 1, log: true, label: 'Q', format: q }),
+    [PID.P2_FREQ]: new Pot(document.getElementById('p2-freq'), { id: PID.P2_FREQ, min: 500, max: 12000, default: 3000, log: true, unit: 'Hz', label: 'Freq', format: hz }),
+    [PID.P2_GAIN]: new Pot(document.getElementById('p2-gain'), { id: PID.P2_GAIN, min: -18, max: 18, default: 0, unit: 'dB', label: 'Gain', format: dB }),
+    [PID.P2_Q]: new Pot(document.getElementById('p2-q'), { id: PID.P2_Q, min: 0.3, max: 6, default: 1, log: true, label: 'Q', format: q }),
+    [PID.HS_FREQ]: new Pot(document.getElementById('hs-freq'), { id: PID.HS_FREQ, min: 2000, max: 18000, default: 8000, log: true, unit: 'Hz', label: 'Freq', format: hz }),
+    [PID.HS_GAIN]: new Pot(document.getElementById('hs-gain'), { id: PID.HS_GAIN, min: -18, max: 18, default: 0, unit: 'dB', label: 'Gain', format: dB }),
+  };
+  for (const p of Object.values(pots)) p.onChange((v, id) => transport.sendSet(id, v));
+
+  const peak = new Meter(document.getElementById('meter-peak'),
+    { mode: 'peak', minDb: -60, maxDb: 0, hotDb: -6, clipDb: -0.5, label: 'Peak' });
+  peak.setDb(-Infinity);
+
+  transport.onSnapshot(params => {
+    for (const [id, value] of params) {
+      const w = pots[id];
+      if (w) { w.setValueFromHost(value); continue; }
+      if (id === METER_PEAK_ID) peak.setDb(value);
+    }
+  });
+  transport.sendReady();
+
+  function applyLayout() {
+    const root = document.getElementById('root');
+    const compact = window.innerWidth < 460 || window.innerHeight < 100;
+    root.classList.toggle('compact', compact);
+    root.classList.toggle('expanded', !compact);
+  }
+  applyLayout();
+  window.addEventListener('resize', applyLayout);
+</script>
+</body>
+</html>

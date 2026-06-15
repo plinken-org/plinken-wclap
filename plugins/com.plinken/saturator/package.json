@@ -1,0 +1,11 @@
+{
+  "name": "@plinken/saturator",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Plinken waveshaping saturator (com.plinken)",
+  "scripts": {
+    "build:wasm": "cargo build -p com-plinken-saturator --target wasm32-unknown-unknown --release && mkdir -p dist && cp ../../../target/wasm32-unknown-unknown/release/com_plinken_saturator.wasm dist/saturator.wclap.wasm",
+    "build": "pnpm run build:wasm && node ../../../scripts/bundle-wclap.mjs ."
+  }
+}

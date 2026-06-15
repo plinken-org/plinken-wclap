@@ -1,0 +1,41 @@
+{
+  "manifest_version": 1,
+  "id": "com.plinken.delay",
+  "name": "Delay",
+  "vendor": "Plinken",
+  "version": "0.1.0",
+  "description": "Stereo delay/echo with feedback, a tone roll-off inside the feedback loop, dry/wet mix, and an optional ping-pong cross-feed.",
+  "features": [
+    "audio-effect",
+    "delay",
+    "echo"
+  ],
+  "license": "MIT",
+  "homepage": "https://plinken.org",
+  "source": "src/",
+  "artifact": "dist/delay.wclap.tar.gz",
+  "format": "tar.gz",
+  "has_ui": true,
+  "ui": {
+    "compact_size": {
+      "width": 360,
+      "height": 56
+    },
+    "expanded_size": {
+      "width": 460,
+      "height": 200
+    }
+  },
+  "plugins": [
+    {
+      "id": "com.plinken.delay",
+      "name": "Delay",
+      "features": [
+        "audio-effect",
+        "delay",
+        "echo"
+      ],
+      "has_ui": true
+    }
+  ]
+}

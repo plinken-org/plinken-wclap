@@ -1,0 +1,41 @@
+{
+  "manifest_version": 1,
+  "id": "com.plinken.saturator",
+  "name": "Saturation",
+  "vendor": "Plinken",
+  "version": "0.1.0",
+  "description": "Waveshaping saturator with three character curves (tanh / tube / fold), post-shaper tone roll-off, and dry/wet blend.",
+  "features": [
+    "audio-effect",
+    "distortion",
+    "saturation"
+  ],
+  "license": "MIT",
+  "homepage": "https://plinken.org",
+  "source": "src/",
+  "artifact": "dist/saturator.wclap.tar.gz",
+  "format": "tar.gz",
+  "has_ui": true,
+  "ui": {
+    "compact_size": {
+      "width": 360,
+      "height": 56
+    },
+    "expanded_size": {
+      "width": 460,
+      "height": 200
+    }
+  },
+  "plugins": [
+    {
+      "id": "com.plinken.saturator",
+      "name": "Saturation",
+      "features": [
+        "audio-effect",
+        "distortion",
+        "saturation"
+      ],
+      "has_ui": true
+    }
+  ]
+}

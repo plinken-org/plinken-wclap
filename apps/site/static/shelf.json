@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "generatedAt": "2026-05-18T16:36:06.826Z",
+  "generatedAt": "2026-06-15T04:56:20.343Z",
   "items": [
     {
       "id": "com.plinken.auto-pan",
@@ -40,14 +40,170 @@
       ]
     },
     {
+      "id": "com.plinken.chorus",
+      "label": "Plinken: Chorus",
+      "url": "/wclap/com.plinken.chorus.wclap.tar.gz",
+      "vendor": "Plinken",
+      "license": "MIT",
+      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/chorus",
+      "version": "0.1.0",
+      "description": "LFO-modulated stereo chorus with up to three voices and a stereo-spread control.",
+      "features": [
+        "audio-effect",
+        "chorus",
+        "modulation"
+      ],
+      "homepage": "https://plinken.org",
+      "has_ui": true,
+      "ui": {
+        "compact_size": {
+          "width": 360,
+          "height": 56
+        },
+        "expanded_size": {
+          "width": 460,
+          "height": 200
+        }
+      },
+      "plugins": [
+        {
+          "id": "com.plinken.chorus",
+          "name": "Chorus",
+          "features": [
+            "audio-effect",
+            "chorus",
+            "modulation"
+          ],
+          "has_ui": true
+        }
+      ]
+    },
+    {
+      "id": "com.plinken.compressor",
+      "label": "Plinken: Compressor",
+      "url": "/wclap/com.plinken.compressor.wclap.tar.gz",
+      "vendor": "Plinken",
+      "license": "MIT",
+      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/compressor",
+      "version": "0.1.0",
+      "description": "Feed-forward stereo dynamics compressor with a soft knee, log-domain peak detector, and gain-reduction metering.",
+      "features": [
+        "audio-effect",
+        "compressor",
+        "dynamics"
+      ],
+      "homepage": "https://plinken.org",
+      "has_ui": true,
+      "ui": {
+        "compact_size": {
+          "width": 380,
+          "height": 56
+        },
+        "expanded_size": {
+          "width": 520,
+          "height": 210
+        }
+      },
+      "plugins": [
+        {
+          "id": "com.plinken.compressor",
+          "name": "Compressor",
+          "features": [
+            "audio-effect",
+            "compressor",
+            "dynamics"
+          ],
+          "has_ui": true
+        }
+      ]
+    },
+    {
+      "id": "com.plinken.delay",
+      "label": "Plinken: Delay",
+      "url": "/wclap/com.plinken.delay.wclap.tar.gz",
+      "vendor": "Plinken",
+      "license": "MIT",
+      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/delay",
+      "version": "0.1.0",
+      "description": "Stereo delay/echo with feedback, a tone roll-off inside the feedback loop, dry/wet mix, and an optional ping-pong cross-feed.",
+      "features": [
+        "audio-effect",
+        "delay",
+        "echo"
+      ],
+      "homepage": "https://plinken.org",
+      "has_ui": true,
+      "ui": {
+        "compact_size": {
+          "width": 360,
+          "height": 56
+        },
+        "expanded_size": {
+          "width": 460,
+          "height": 200
+        }
+      },
+      "plugins": [
+        {
+          "id": "com.plinken.delay",
+          "name": "Delay",
+          "features": [
+            "audio-effect",
+            "delay",
+            "echo"
+          ],
+          "has_ui": true
+        }
+      ]
+    },
+    {
+      "id": "com.plinken.eq",
+      "label": "Plinken: Parametric EQ",
+      "url": "/wclap/com.plinken.eq.wclap.tar.gz",
+      "vendor": "Plinken",
+      "license": "MIT",
+      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/eq",
+      "version": "0.1.0",
+      "description": "4-band parametric stereo EQ: low shelf, two parametric peaking bands (freq/gain/Q), and high shelf, using RBJ biquad coefficients.",
+      "features": [
+        "audio-effect",
+        "equalizer",
+        "eq"
+      ],
+      "homepage": "https://plinken.org",
+      "has_ui": true,
+      "ui": {
+        "compact_size": {
+          "width": 420,
+          "height": 56
+        },
+        "expanded_size": {
+          "width": 560,
+          "height": 220
+        }
+      },
+      "plugins": [
+        {
+          "id": "com.plinken.eq",
+          "name": "Parametric EQ",
+          "features": [
+            "audio-effect",
+            "equalizer",
+            "eq"
+          ],
+          "has_ui": true
+        }
+      ]
+    },
+    {
       "id": "com.plinken.organ",
       "label": "Plinken: Organ",
       "url": "/wclap/com.plinken.organ.wclap.tar.gz",
       "vendor": "Plinken",
       "license": "MIT",
       "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/organ",
-      "version": "0.0.1",
-      "description": "Hammond-style additive tonewheel organ. 9 drawbars (16' / 5 1/3' / 8' / 4' / 2 2/3' / 2' / 1 3/5' / 1 1/3' / 1'), 8-voice polyphony. First Cmajor-authored plugin in com.plinken — proves the cmaj → WASI-SDK → .wclap pipeline.",
+      "version": "0.0.4",
+      "description": "Hammond-style additive tonewheel organ. 9 drawbars, 8-voice polyphony, stereo drawbar spread (mono-safe low end).",
       "features": [
         "instrument",
         "synthesizer"
@@ -73,7 +229,7 @@
       "vendor": "Plinken",
       "license": "MIT",
       "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/piano",
-      "version": "0.0.1",
+      "version": "0.0.3",
       "description": "Additive piano — 6 stretched-tuning partials per voice, pitch-dependent exponential decay, 8 voices. Second user of the cmaj → WASI-SDK → .wclap pipeline.",
       "features": [
         "instrument",
@@ -88,6 +244,82 @@
           "features": [
             "instrument",
             "synthesizer"
+          ],
+          "has_ui": true
+        }
+      ]
+    },
+    {
+      "id": "com.plinken.reverb",
+      "label": "Plinken: Reverb",
+      "url": "/wclap/com.plinken.reverb.wclap.tar.gz",
+      "vendor": "Plinken",
+      "license": "MIT",
+      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/reverb",
+      "version": "0.1.0",
+      "description": "Freeverb-style algorithmic stereo reverb with decay (size), damping, pre-delay, stereo width, and dry/wet mix.",
+      "features": [
+        "audio-effect",
+        "reverb"
+      ],
+      "homepage": "https://plinken.org",
+      "has_ui": true,
+      "ui": {
+        "compact_size": {
+          "width": 360,
+          "height": 56
+        },
+        "expanded_size": {
+          "width": 460,
+          "height": 200
+        }
+      },
+      "plugins": [
+        {
+          "id": "com.plinken.reverb",
+          "name": "Reverb",
+          "features": [
+            "audio-effect",
+            "reverb"
+          ],
+          "has_ui": true
+        }
+      ]
+    },
+    {
+      "id": "com.plinken.saturator",
+      "label": "Plinken: Saturation",
+      "url": "/wclap/com.plinken.saturator.wclap.tar.gz",
+      "vendor": "Plinken",
+      "license": "MIT",
+      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/saturator",
+      "version": "0.1.0",
+      "description": "Waveshaping saturator with three character curves (tanh / tube / fold), post-shaper tone roll-off, and dry/wet blend.",
+      "features": [
+        "audio-effect",
+        "distortion",
+        "saturation"
+      ],
+      "homepage": "https://plinken.org",
+      "has_ui": true,
+      "ui": {
+        "compact_size": {
+          "width": 360,
+          "height": 56
+        },
+        "expanded_size": {
+          "width": 460,
+          "height": 200
+        }
+      },
+      "plugins": [
+        {
+          "id": "com.plinken.saturator",
+          "name": "Saturation",
+          "features": [
+            "audio-effect",
+            "distortion",
+            "saturation"
           ],
           "has_ui": true
         }
@@ -166,12 +398,12 @@
       "vendor": "Plinken",
       "license": "MIT",
       "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/vocal-limiter",
-      "version": "0.0.6",
-      "description": "Lookahead peak limiter tuned for vocals. MVP scaffold — ceiling/attack/release hardcoded, parameters land in a follow-up.",
+      "version": "0.1.2",
+      "description": "Zero-latency feed-back peak limiter for tracking and vocals. No lookahead — safe in a recording/monitoring chain.",
       "features": [
         "audio-effect",
         "limiter",
-        "mastering"
+        "vocal"
       ],
       "homepage": "https://plinken.org",
       "has_ui": true,
@@ -192,7 +424,7 @@
           "features": [
             "audio-effect",
             "limiter",
-            "mastering"
+            "vocal"
           ],
           "has_ui": true
         }

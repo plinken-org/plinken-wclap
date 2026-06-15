@@ -1,0 +1,11 @@
+{
+  "name": "@plinken/eq",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Plinken 4-band parametric EQ (com.plinken)",
+  "scripts": {
+    "build:wasm": "cargo build -p com-plinken-eq --target wasm32-unknown-unknown --release && mkdir -p dist && cp ../../../target/wasm32-unknown-unknown/release/com_plinken_eq.wasm dist/eq.wclap.wasm",
+    "build": "pnpm run build:wasm && node ../../../scripts/bundle-wclap.mjs ."
+  }
+}

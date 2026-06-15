@@ -1,0 +1,11 @@
+{
+  "name": "@plinken/delay",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Plinken stereo delay (com.plinken)",
+  "scripts": {
+    "build:wasm": "cargo build -p com-plinken-delay --target wasm32-unknown-unknown --release && mkdir -p dist && cp ../../../target/wasm32-unknown-unknown/release/com_plinken_delay.wasm dist/delay.wclap.wasm",
+    "build": "pnpm run build:wasm && node ../../../scripts/bundle-wclap.mjs ."
+  }
+}

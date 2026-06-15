@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Saturation</title>
+<link rel="stylesheet" href="../widgets/widgets.css">
+<style>
+  .root {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    display: grid;
+    align-items: center;
+  }
+  .root.expanded {
+    grid-template-rows: auto 1fr;
+    padding: 12px 16px;
+    gap: 10px;
+  }
+  .root.expanded .title { text-align: center; font-size: 0.78rem; }
+  .body { display: flex; align-items: flex-start; gap: 18px; justify-content: center; }
+  .controls { display: flex; align-items: flex-start; gap: 16px; }
+  .meters {
+    display: flex; align-items: flex-start; gap: 12px;
+    border-left: 1px solid var(--border-soft); padding-left: 16px;
+  }
+
+  .root.compact {
+    grid-template-columns: max-content 1fr max-content;
+    gap: 8px; padding: 0 10px;
+    --pot-size: 34px; --meter-w: 8px; --meter-h: 36px;
+  }
+  .root.compact .title { font-size: 0.6rem; }
+  .root.compact .controls { gap: 10px; }
+  .root.compact .pot-label,
+  .root.compact .pot-readout,
+  .root.compact .meter-stack .label,
+  .root.compact .meter-stack .readout { display: none; }
+</style>
+</head>
+<body>
+<div class="root expanded" id="root">
+  <div class="title">Saturation</div>
+  <div class="body">
+    <div class="controls">
+      <div id="ctrl-drive"></div>
+      <div id="ctrl-type"></div>
+      <div id="ctrl-tone"></div>
+      <div id="ctrl-mix"></div>
+      <div id="ctrl-output"></div>
+    </div>
+    <div class="meters">
+      <div id="meter-peak"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { Pot } from '../widgets/pot.mjs';
+  import { Meter } from '../widgets/meter.mjs';
+  import { Transport } from '../widgets/transport.mjs';
+
+  // Param IDs — must match plugins/com.plinken/saturator/src/lib.rs
+  const PID_DRIVE = 0x0001;
+  const PID_TYPE = 0x0002;
+  const PID_TONE = 0x0003;
+  const PID_MIX = 0x0004;
+  const PID_OUTPUT = 0x0005;
+  const METER_PEAK_ID = 0x1000;
+
+  const TYPE_NAMES = ['Tanh', 'Tube', 'Fold'];
+  const transport = new Transport();
+
+  const drive = new Pot(document.getElementById('ctrl-drive'),
+    { id: PID_DRIVE, min: 0, max: 36, default: 6, unit: 'dB', label: 'Drive',
+      format: v => `${v.toFixed(1)} dB` });
+  const type = new Pot(document.getElementById('ctrl-type'),
+    { id: PID_TYPE, min: 0, max: 2, default: 0, label: 'Type',
+      format: v => TYPE_NAMES[Math.round(v)] });
+  const tone = new Pot(document.getElementById('ctrl-tone'),
+    { id: PID_TONE, min: 500, max: 18000, default: 12000, log: true, unit: 'Hz', label: 'Tone',
+      format: v => v >= 1000 ? `${(v / 1000).toFixed(1)} kHz` : `${Math.round(v)} Hz` });
+  const mix = new Pot(document.getElementById('ctrl-mix'),
+    { id: PID_MIX, min: 0, max: 1, default: 1, label: 'Mix',
+      format: v => `${Math.round(v * 100)}%` });
+  const output = new Pot(document.getElementById('ctrl-output'),
+    { id: PID_OUTPUT, min: -24, max: 12, default: 0, unit: 'dB', label: 'Output',
+      format: v => `${v.toFixed(1)} dB` });
+
+  const controls = [drive, type, tone, mix, output];
+  for (const c of controls) c.onChange((v, id) => transport.sendSet(id, v));
+
+  const peak = new Meter(document.getElementById('meter-peak'),
+    { mode: 'peak', minDb: -60, maxDb: 0, hotDb: -6, clipDb: -0.5, label: 'Peak' });
+  peak.setDb(-Infinity);
+
+  const widgets = new Map([
+    [PID_DRIVE, drive], [PID_TYPE, type], [PID_TONE, tone],
+    [PID_MIX, mix], [PID_OUTPUT, output],
+  ]);
+  transport.onSnapshot(params => {
+    for (const [id, value] of params) {
+      const w = widgets.get(id);
+      if (w) { w.setValueFromHost(value); continue; }
+      if (id === METER_PEAK_ID) peak.setDb(value);
+    }
+  });
+  transport.sendReady();
+
+  function applyLayout() {
+    const root = document.getElementById('root');
+    const compact = window.innerWidth < 360 || window.innerHeight < 90;
+    root.classList.toggle('compact', compact);
+    root.classList.toggle('expanded', !compact);
+  }
+  applyLayout();
+  window.addEventListener('resize', applyLayout);
+</script>
+</body>
+</html>

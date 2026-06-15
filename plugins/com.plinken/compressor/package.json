@@ -1,0 +1,11 @@
+{
+  "name": "@plinken/compressor",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Plinken feed-forward compressor (com.plinken)",
+  "scripts": {
+    "build:wasm": "cargo build -p com-plinken-compressor --target wasm32-unknown-unknown --release && mkdir -p dist && cp ../../../target/wasm32-unknown-unknown/release/com_plinken_compressor.wasm dist/compressor.wclap.wasm",
+    "build": "pnpm run build:wasm && node ../../../scripts/bundle-wclap.mjs ."
+  }
+}

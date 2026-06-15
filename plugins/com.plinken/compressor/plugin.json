@@ -1,0 +1,41 @@
+{
+  "manifest_version": 1,
+  "id": "com.plinken.compressor",
+  "name": "Compressor",
+  "vendor": "Plinken",
+  "version": "0.1.0",
+  "description": "Feed-forward stereo dynamics compressor with a soft knee, log-domain peak detector, and gain-reduction metering.",
+  "features": [
+    "audio-effect",
+    "compressor",
+    "dynamics"
+  ],
+  "license": "MIT",
+  "homepage": "https://plinken.org",
+  "source": "src/",
+  "artifact": "dist/compressor.wclap.tar.gz",
+  "format": "tar.gz",
+  "has_ui": true,
+  "ui": {
+    "compact_size": {
+      "width": 380,
+      "height": 56
+    },
+    "expanded_size": {
+      "width": 520,
+      "height": 210
+    }
+  },
+  "plugins": [
+    {
+      "id": "com.plinken.compressor",
+      "name": "Compressor",
+      "features": [
+        "audio-effect",
+        "compressor",
+        "dynamics"
+      ],
+      "has_ui": true
+    }
+  ]
+}

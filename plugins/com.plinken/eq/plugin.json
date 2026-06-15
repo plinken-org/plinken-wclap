@@ -1,0 +1,41 @@
+{
+  "manifest_version": 1,
+  "id": "com.plinken.eq",
+  "name": "Parametric EQ",
+  "vendor": "Plinken",
+  "version": "0.1.0",
+  "description": "4-band parametric stereo EQ: low shelf, two parametric peaking bands (freq/gain/Q), and high shelf, using RBJ biquad coefficients.",
+  "features": [
+    "audio-effect",
+    "equalizer",
+    "eq"
+  ],
+  "license": "MIT",
+  "homepage": "https://plinken.org",
+  "source": "src/",
+  "artifact": "dist/eq.wclap.tar.gz",
+  "format": "tar.gz",
+  "has_ui": true,
+  "ui": {
+    "compact_size": {
+      "width": 420,
+      "height": 56
+    },
+    "expanded_size": {
+      "width": 560,
+      "height": 220
+    }
+  },
+  "plugins": [
+    {
+      "id": "com.plinken.eq",
+      "name": "Parametric EQ",
+      "features": [
+        "audio-effect",
+        "equalizer",
+        "eq"
+      ],
+      "has_ui": true
+    }
+  ]
+}

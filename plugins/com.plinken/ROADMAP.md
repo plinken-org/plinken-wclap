@@ -10,19 +10,31 @@ and use the public [`widgets/`](../../widgets) GUI library (auto-bundled into ea
 tarball by `scripts/bundle-wclap.mjs`). No external/private UI framework — these
 ship from this public repo and stay self-contained.
 
-## Todo
+## Status
 
-| | id | name | author | category tags | key params | UI widgets |
-|---|---|---|---|---|---|---|
-| [ ] | `com.plinken.eq` | Parametric EQ | Rust (fundsp) | `audio-effect`,`equalizer`,`eq` | 4 bands × (freq, gain, Q); low/high shelf toggles | Pot, Toggle, Meter |
-| [ ] | `com.plinken.compressor` | Compressor | Rust (fundsp) | `audio-effect`,`compressor`,`dynamics` | threshold, ratio, attack, release, makeup, knee | Pot, Fader, GR Meter |
-| [ ] | `com.plinken.delay` | Delay | Rust (fundsp) | `audio-effect`,`delay`,`echo` | time (ms/sync), feedback, mix, tone (LP), ping-pong | Pot, Toggle, Meter |
-| [ ] | `com.plinken.reverb` | Reverb | Rust (fundsp) | `audio-effect`,`reverb` | size/decay, damping, pre-delay, mix, width | Pot, Meter |
-| [ ] | `com.plinken.chorus` | Chorus | Rust (fundsp) | `audio-effect`,`chorus`,`modulation` | rate, depth, voices, mix, spread | Pot, Toggle |
-| [ ] | `com.plinken.saturator` | Saturation | Rust (fundsp) | `audio-effect`,`distortion`,`saturation` | drive, type (tanh/tube/fold), tone, mix, output | Pot, Selector/Toggle, Meter |
+All six are **built and shelved** — each compiles to `wasm32-unknown-unknown`,
+bundles to a `.wclap.tar.gz`, and is listed in `shelf.json` (so the public
+`wclap-host` demo loads them). DSP is hand-rolled Rust on the shared
+`crates/wclap-plugin` scaffold (no `fundsp` dependency), with `widgets/`-based UIs.
+
+| | id | name | category tags | key params | UI widgets |
+|---|---|---|---|---|---|
+| [x] | `com.plinken.eq` | Parametric EQ | `audio-effect`,`equalizer`,`eq` | low shelf (freq/gain), 2 peaks (freq/gain/Q), high shelf (freq/gain) | Pot, Meter |
+| [x] | `com.plinken.compressor` | Compressor | `audio-effect`,`compressor`,`dynamics` | threshold, ratio, attack, release, makeup, knee | Pot, GR Meter |
+| [x] | `com.plinken.delay` | Delay | `audio-effect`,`delay`,`echo` | time, feedback, tone (LP), mix, ping-pong | Pot, Toggle, Meter |
+| [x] | `com.plinken.reverb` | Reverb | `audio-effect`,`reverb` | size/decay, damping, pre-delay, mix, width | Pot, Meter |
+| [x] | `com.plinken.chorus` | Chorus | `audio-effect`,`chorus`,`modulation` | rate, depth, voices, mix, spread | Pot, Meter |
+| [x] | `com.plinken.saturator` | Saturation | `audio-effect`,`distortion`,`saturation` | drive, type (tanh/tube/fold), tone, mix, output | Pot, Meter |
 
 Each plugin's feature tags map onto one of the DAW picker's existing FX category
 buckets, so it lands under the right filter with no host-side change.
+
+### Follow-ups
+
+- Runtime audio QA in the `wclap-host` browser demo (DSP was verified by
+  construction + compile; in-browser listening is the remaining check).
+- Surface them inside the **Plinken DAW** (catalog row + artifact hosting — a
+  separate, private-repo step; see "Beyond this repo" below).
 
 ## How to build each one
 

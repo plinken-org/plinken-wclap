@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Reverb</title>
+<link rel="stylesheet" href="../widgets/widgets.css">
+<style>
+  .root { width: 100%; height: 100%; box-sizing: border-box; display: grid; align-items: center; }
+  .root.expanded { grid-template-rows: auto 1fr; padding: 12px 16px; gap: 10px; }
+  .root.expanded .title { text-align: center; font-size: 0.78rem; }
+  .body { display: flex; align-items: center; gap: 18px; justify-content: center; }
+  .controls { display: flex; align-items: flex-start; gap: 16px; }
+  .meters { display: flex; align-items: flex-start; padding-left: 16px; border-left: 1px solid var(--border-soft); }
+  .root.compact {
+    grid-template-columns: max-content 1fr max-content; gap: 8px; padding: 0 10px;
+    --pot-size: 34px; --meter-w: 8px; --meter-h: 36px;
+  }
+  .root.compact .title { font-size: 0.6rem; }
+  .root.compact .controls { gap: 10px; }
+  .root.compact .pot-label, .root.compact .pot-readout,
+  .root.compact .meter-stack .label, .root.compact .meter-stack .readout { display: none; }
+</style>
+</head>
+<body>
+<div class="root expanded" id="root">
+  <div class="title">Reverb</div>
+  <div class="body">
+    <div class="controls">
+      <div id="ctrl-size"></div>
+      <div id="ctrl-damp"></div>
+      <div id="ctrl-predelay"></div>
+      <div id="ctrl-width"></div>
+      <div id="ctrl-mix"></div>
+    </div>
+    <div class="meters"><div id="meter-peak"></div></div>
+  </div>
+</div>
+
+<script type="module">
+  import { Pot } from '../widgets/pot.mjs';
+  import { Meter } from '../widgets/meter.mjs';
+  import { Transport } from '../widgets/transport.mjs';
+
+  // Param IDs — must match plugins/com.plinken/reverb/src/lib.rs
+  const PID_SIZE = 0x0001;
+  const PID_DAMP = 0x0002;
+  const PID_PREDELAY = 0x0003;
+  const PID_MIX = 0x0004;
+  const PID_WIDTH = 0x0005;
+  const METER_PEAK_ID = 0x1000;
+
+  const transport = new Transport();
+
+  const size = new Pot(document.getElementById('ctrl-size'),
+    { id: PID_SIZE, min: 0, max: 1, default: 0.5, label: 'Size',
+      format: v => `${Math.round(v * 100)}%` });
+  const damp = new Pot(document.getElementById('ctrl-damp'),
+    { id: PID_DAMP, min: 0, max: 1, default: 0.5, label: 'Damp',
+      format: v => `${Math.round(v * 100)}%` });
+  const predelay = new Pot(document.getElementById('ctrl-predelay'),
+    { id: PID_PREDELAY, min: 0, max: 200, default: 0, unit: 'ms', label: 'Pre-Dly',
+      format: v => `${Math.round(v)} ms` });
+  const width = new Pot(document.getElementById('ctrl-width'),
+    { id: PID_WIDTH, min: 0, max: 1, default: 1, label: 'Width',
+      format: v => `${Math.round(v * 100)}%` });
+  const mix = new Pot(document.getElementById('ctrl-mix'),
+    { id: PID_MIX, min: 0, max: 1, default: 0.3, label: 'Mix',
+      format: v => `${Math.round(v * 100)}%` });
+
+  const controls = [size, damp, predelay, width, mix];
+  for (const c of controls) c.onChange((v, id) => transport.sendSet(id, v));
+
+  const peak = new Meter(document.getElementById('meter-peak'),
+    { mode: 'peak', minDb: -60, maxDb: 0, hotDb: -6, clipDb: -0.5, label: 'Peak' });
+  peak.setDb(-Infinity);
+
+  const widgets = new Map([
+    [PID_SIZE, size], [PID_DAMP, damp], [PID_PREDELAY, predelay],
+    [PID_WIDTH, width], [PID_MIX, mix],
+  ]);
+  transport.onSnapshot(params => {
+    for (const [id, value] of params) {
+      const w = widgets.get(id);
+      if (w) { w.setValueFromHost(value); continue; }
+      if (id === METER_PEAK_ID) peak.setDb(value);
+    }
+  });
+  transport.sendReady();
+
+  function applyLayout() {
+    const root = document.getElementById('root');
+    const compact = window.innerWidth < 360 || window.innerHeight < 90;
+    root.classList.toggle('compact', compact);
+    root.classList.toggle('expanded', !compact);
+  }
+  applyLayout();
+  window.addEventListener('resize', applyLayout);
+</script>
+</body>
+</html>
