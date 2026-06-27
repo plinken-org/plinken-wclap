@@ -75,29 +75,6 @@ pnpm --filter @plinken/site deploy       # build + ship to Cloudflare Workers
 
 The WCLAP host PoC (`apps/wclap-host/`) is scaffolded but empty pending the first vendor wire-up.
 
-## :warning: SECRETS POLICY — PUBLIC REPO
-
-**This repository is public.** Anything pushed here is world-readable forever — git history rewrites are damage control, not a fix.
-
-> **Never commit secrets.** That includes `.env`, `.dev.vars`, API tokens, Cloudflare Worker secrets, account IDs you consider sensitive, signing keys, private certs, DB URLs with creds, or OAuth client secrets.
-
-Where credentials *do* belong:
-
-- **Cloudflare Workers** → `wrangler secret put <NAME>` or the Cloudflare dashboard. Never inline in `wrangler.jsonc`.
-- **Local dev** → `.dev.vars` (Workers) or `.env.local` (Vite). Both gitignored.
-- **CI** → GitHub Actions secrets / environment secrets.
-- **Templates** → `.example` / `.sample` suffixed files with placeholders only.
-
-Sanity-check before pushing:
-
-```sh
-git diff --cached | grep -iE 'secret|token|api[_-]?key|password|bearer|private[_-]?key'
-```
-
-If a credential ever lands here: **rotate it first**, scrub history second.
-
-Full policy lives in [CLAUDE.md](./CLAUDE.md).
-
 ## STATUS
 
 - [x] Monorepo scaffold (pnpm · Turbo · Cargo)
