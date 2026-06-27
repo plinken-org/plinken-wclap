@@ -30,7 +30,7 @@ const SITE_WCLAP = resolve(REPO_ROOT, 'apps/site/static/wclap');
 const SITE_SHELF = resolve(REPO_ROOT, 'apps/site/static/shelf.json');
 
 const REPO_TREE_BASE =
-  'https://github.com/taluvi-dev/plinken-org/tree/main/plugins';
+  'https://github.com/plinken-org/plinken-wclap/tree/main/plugins';
 
 // `has_ui` reflects whether the bundle ships any plugin GUI assets (i.e. an
 // HTML file inside the tar.gz). For multi-plugin bundles where only some

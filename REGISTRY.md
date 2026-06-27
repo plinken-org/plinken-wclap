@@ -93,7 +93,7 @@ plugin whose `id`/`name` match the bundle's top-level fields.
       "vendor": "Plinken",
       "version": "0.1.0",
       "license": "MIT",
-      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/auto-pan",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/auto-pan",
       "description": "Stereo auto-panner with sine LFO.",
       "features": ["audio-effect", "utility"],
       "has_ui": false,

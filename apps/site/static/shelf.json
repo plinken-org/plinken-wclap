@@ -8,7 +8,7 @@
       "url": "/wclap/com.plinken.auto-pan.wclap.tar.gz",
       "vendor": "Plinken",
       "license": "MIT",
-      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/auto-pan",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/auto-pan",
       "version": "0.1.0",
       "description": "Stereo auto-panner with sine LFO. Two parameters: speed (Hz) and wet/dry mix.",
       "features": [
@@ -45,7 +45,7 @@
       "url": "/wclap/com.plinken.chorus.wclap.tar.gz",
       "vendor": "Plinken",
       "license": "MIT",
-      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/chorus",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/chorus",
       "version": "0.1.0",
       "description": "LFO-modulated stereo chorus with up to three voices and a stereo-spread control.",
       "features": [
@@ -84,7 +84,7 @@
       "url": "/wclap/com.plinken.compressor.wclap.tar.gz",
       "vendor": "Plinken",
       "license": "MIT",
-      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/compressor",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/compressor",
       "version": "0.1.0",
       "description": "Feed-forward stereo dynamics compressor with a soft knee, log-domain peak detector, and gain-reduction metering.",
       "features": [
@@ -123,7 +123,7 @@
       "url": "/wclap/com.plinken.delay.wclap.tar.gz",
       "vendor": "Plinken",
       "license": "MIT",
-      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/delay",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/delay",
       "version": "0.1.0",
       "description": "Stereo delay/echo with feedback, a tone roll-off inside the feedback loop, dry/wet mix, and an optional ping-pong cross-feed.",
       "features": [
@@ -162,7 +162,7 @@
       "url": "/wclap/com.plinken.eq.wclap.tar.gz",
       "vendor": "Plinken",
       "license": "MIT",
-      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/eq",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/eq",
       "version": "0.1.0",
       "description": "4-band parametric stereo EQ: low shelf, two parametric peaking bands (freq/gain/Q), and high shelf, using RBJ biquad coefficients.",
       "features": [
@@ -201,7 +201,7 @@
       "url": "/wclap/com.plinken.organ.wclap.tar.gz",
       "vendor": "Plinken",
       "license": "MIT",
-      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/organ",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/organ",
       "version": "0.0.4",
       "description": "Hammond-style additive tonewheel organ. 9 drawbars, 8-voice polyphony, stereo drawbar spread (mono-safe low end).",
       "features": [
@@ -228,7 +228,7 @@
       "url": "/wclap/com.plinken.piano.wclap.tar.gz",
       "vendor": "Plinken",
       "license": "MIT",
-      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/piano",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/piano",
       "version": "0.0.3",
       "description": "Additive piano — 6 stretched-tuning partials per voice, pitch-dependent exponential decay, 8 voices. Second user of the cmaj → WASI-SDK → .wclap pipeline.",
       "features": [
@@ -255,7 +255,7 @@
       "url": "/wclap/com.plinken.reverb.wclap.tar.gz",
       "vendor": "Plinken",
       "license": "MIT",
-      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/reverb",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/reverb",
       "version": "0.1.0",
       "description": "Freeverb-style algorithmic stereo reverb with decay (size), damping, pre-delay, stereo width, and dry/wet mix.",
       "features": [
@@ -292,7 +292,7 @@
       "url": "/wclap/com.plinken.saturator.wclap.tar.gz",
       "vendor": "Plinken",
       "license": "MIT",
-      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/saturator",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/saturator",
       "version": "0.1.0",
       "description": "Waveshaping saturator with three character curves (tanh / tube / fold), post-shaper tone roll-off, and dry/wet blend.",
       "features": [
@@ -331,7 +331,7 @@
       "url": "/wclap/com.plinken.spectrum.wclap.tar.gz",
       "vendor": "Plinken",
       "license": "MIT",
-      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/spectrum",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/spectrum",
       "version": "0.0.1",
       "description": "Real-time spectrum analyzer. Audio passes through unchanged; an FFT side-tap pushes 64 log-spaced magnitude bands to the UI at ~30 Hz.",
       "features": [
@@ -370,7 +370,7 @@
       "url": "/wclap/com.plinken.synome.wclap.tar.gz",
       "vendor": "Plinken",
       "license": "MIT",
-      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/synome",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/synome",
       "version": "0.0.1",
       "description": "Polyphonic synthesizer with anti-aliased BLEP oscillators. (Phase A scaffold — silent.)",
       "features": [
@@ -397,7 +397,7 @@
       "url": "/wclap/com.plinken.vocal-limiter.wclap.tar.gz",
       "vendor": "Plinken",
       "license": "MIT",
-      "source": "https://github.com/taluvi-dev/plinken-org/tree/main/plugins/com.plinken/vocal-limiter",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/vocal-limiter",
       "version": "0.1.2",
       "description": "Zero-latency feed-back peak limiter for tracking and vocals. No lookahead — safe in a recording/monitoring chain.",
       "features": [

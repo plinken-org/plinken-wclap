@@ -25,7 +25,7 @@
       <a href="https://plinken.com" target="_blank" rel="noreferrer noopener"
         >plinken.com</a
       >
-      <a href="https://github.com/taluvi-dev/plinken-org" target="_blank" rel="noreferrer noopener">
+      <a href="https://github.com/plinken-org/plinken-wclap" target="_blank" rel="noreferrer noopener">
         GitHub
       </a>
     </div>
@@ -60,7 +60,7 @@
         </a>
         <a
           class="btn ghost"
-          href="https://github.com/taluvi-dev/plinken-org"
+          href="https://github.com/plinken-org/plinken-wclap"
           target="_blank"
           rel="noreferrer noopener"
         >
@@ -165,10 +165,10 @@
         <dt>Source</dt>
         <dd>
           <a
-            href="https://github.com/taluvi-dev/plinken-org/tree/main/plugins"
+            href="https://github.com/plinken-org/plinken-wclap/tree/main/plugins"
             target="_blank"
             rel="noreferrer noopener"
-            >github.com/taluvi-dev/plinken-org/plugins</a
+            >github.com/plinken-org/plinken-wclap/plugins</a
           >
         </dd>
       </dl>

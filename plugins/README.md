@@ -57,7 +57,7 @@ plugin GUI).
 
 ## How to contribute a plugin
 
-1. Fork [`taluvi-dev/plinken-org`](https://github.com/taluvi-dev/plinken-org).
+1. Fork [`plinken-org/plinken-wclap`](https://github.com/plinken-org/plinken-wclap).
 2. Pick (or create) your vendor folder under `plugins/<your-reverse-dns>/`. If
    you haven't published here before, add a `README.md` in your vendor folder
    (name, contact, license preference).

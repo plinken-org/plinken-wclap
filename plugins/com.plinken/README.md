@@ -35,7 +35,7 @@ See [`ROADMAP.md`](./ROADMAP.md) for the build pattern and status.
 
 - Web: [plinken.com](https://plinken.com)
 - Open-source side: [plinken.org](https://plinken.org)
-- Source: [github.com/taluvi-dev/plinken-org](https://github.com/taluvi-dev/plinken-org)
+- Source: [github.com/plinken-org/plinken-wclap](https://github.com/plinken-org/plinken-wclap)
 
 ## License
 

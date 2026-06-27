@@ -60,8 +60,8 @@ plinken-org/
 ## GETTING STARTED
 
 ```sh
-git clone --recurse-submodules git@github.com:taluvi-dev/plinken-org.git
-cd plinken-org
+git clone --recurse-submodules git@github.com:plinken-org/plinken-wclap.git
+cd plinken-wclap
 pnpm install
 ```
 
