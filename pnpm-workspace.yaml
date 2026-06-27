@@ -3,3 +3,7 @@ packages:
   - "plugins/*/*"
   - "vendor/wclap-host-js"
   - "widget-lib"
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - workerd
