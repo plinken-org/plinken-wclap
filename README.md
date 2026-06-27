@@ -1,6 +1,6 @@
 <div align="center">
 
-# PLINKEN.ORG
+# PLINKEN WCLAP
 
 ### OPEN WCLAP HOST &amp; PLUGINS
 
