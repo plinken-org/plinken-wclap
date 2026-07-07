@@ -2,9 +2,13 @@
 
 MPC-style 16-pad drum machine plugin for the Plinken WCLAP host.
 
-**Status: Phase A scaffold — silent.** This crate builds a WCLAP plugin that
-loads cleanly, declares its audio + note ports, and renders silence. The drum
-voices land in subsequent phases.
+**Status: sample playback landed.** Notes trigger pads through the CLAP
+note port; pad samples arrive from the host as PLSP chunks over the
+webview byte channel (`plinken-sample-core`'s `SampleAssembler`); per-pad
+level / tune / pan / AD envelope / Moog filter / mute groups all work.
+No UI yet — the pad grid lives app-side first (drop target for audio
+assets); a `widgets/` UI for the standalone host comes later. A pad with
+no sample delivered is silent.
 
 Open source (MIT), like everything in this repo — see [`LICENSE`](./LICENSE).
 

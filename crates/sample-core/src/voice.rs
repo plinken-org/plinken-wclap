@@ -432,6 +432,19 @@ impl VoicePool {
         (left, right)
     }
 
+    /// Render one frame per active voice, delivering each voice's output
+    /// with its tag to `sink(tag, l, r)` instead of summing — callers that
+    /// need per-tag post-processing (e.g. Pulze's per-pad filters) group
+    /// and sum themselves.
+    pub fn render_each(&mut self, host_sample_rate: f32, mut sink: impl FnMut(u32, f32, f32)) {
+        for (i, v) in self.voices.iter_mut().enumerate() {
+            if v.is_active() {
+                let (l, r) = v.render(host_sample_rate);
+                sink(self.tags[i], l, r);
+            }
+        }
+    }
+
     pub fn active_count(&self) -> usize {
         self.voices.iter().filter(|v| v.is_active()).count()
     }

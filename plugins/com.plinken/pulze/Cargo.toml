@@ -1,6 +1,6 @@
 [package]
 name = "com-plinken-pulze"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 license = "MIT"
 publish = false
@@ -9,4 +9,8 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-wclap-plugin = { path = "../../../crates/wclap-plugin" }
+# std plugin (like eq/synome): default-features = false drops the no_std
+# runtime (dlmalloc + panic handler) so std's own are used.
+wclap-plugin = { path = "../../../crates/wclap-plugin", default-features = false }
+plinken-dsp = { path = "../../../crates/plinken-dsp" }
+plinken-sample-core = { path = "../../../crates/sample-core" }
