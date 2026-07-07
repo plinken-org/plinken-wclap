@@ -14,7 +14,7 @@
   "has_ui": true,
   "ui": {
     "compact_size": { "width": 260, "height": 56 },
-    "expanded_size": { "width": 460, "height": 170 }
+    "expanded_size": { "width": 560, "height": 640 }
   },
   "plugins": [
     {

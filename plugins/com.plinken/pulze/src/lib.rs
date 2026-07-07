@@ -58,6 +58,36 @@ struct PulzePlugin {
     /// filter). Allocated once; only touched pads are cleared per frame.
     pad_accum: Vec<(f32, f32)>,
     touched: Vec<u32>,
+    /// TEMP TEST: when a triggered pad has no sample, emit a short −20 dB
+    /// white-noise burst so a key press proves the note→render→runner
+    /// audio path independent of sample loading. Countdown in frames.
+    test_noise_frames: usize,
+    test_rng: u32,
+    /// DEBUG MIDI indicator: frames remaining for the "note arrived" light,
+    /// set in `note_on`, counted down in `process`. `midi_ui_on` is the
+    /// last state pushed to the UI so we only send on a change.
+    midi_pulse: u32,
+    midi_ui_on: bool,
+}
+
+/// Pseudo-param id the UI watches for the MIDI-activity light (not a real
+/// param — just a channel for `process` → UI pushes via a params snapshot).
+const MIDI_ACTIVITY_ID: u32 = 0xFF00;
+
+/// Encode a minimal `{params: {id: value}}` CBOR snapshot — the exact
+/// shape the UI's `decodeParamsSnapshot` expects (see wclap-plugin
+/// `push_params_snapshot`).
+fn encode_activity(id: u32, value: f64) -> [u8; 23] {
+    let mut b = [0u8; 23];
+    b[0] = 0xa1; // map(1)
+    b[1] = 0x66; // text(6) "params"
+    b[2..8].copy_from_slice(b"params");
+    b[8] = 0xa1; // map(1) — one entry
+    b[9] = 0x1a; // u32 key
+    b[10..14].copy_from_slice(&id.to_be_bytes());
+    b[14] = 0xfb; // f64 value
+    b[15..23].copy_from_slice(&value.to_be_bytes());
+    b
 }
 
 impl PulzePlugin {
@@ -72,6 +102,10 @@ impl PulzePlugin {
 
     fn trigger_pad(&mut self, pad: usize, key: i16, velocity: f64) {
         let Some(sample) = self.samples[pad].clone() else {
+            // TEMP TEST: no sample on this pad → −20 dB white-noise burst
+            // (~150 ms) so a key press proves the whole runner audio path
+            // even before sample delivery works.
+            self.test_noise_frames = (self.sample_rate * 0.15) as usize;
             return;
         };
         let one_shot = self.value(pad, PadParam::OneShot) > 0.5;
@@ -153,6 +187,10 @@ impl Plugin for PulzePlugin {
             sample_rate: 48000.0,
             pad_accum: vec![(0.0, 0.0); PADS],
             touched: Vec::with_capacity(MAX_VOICES),
+            test_noise_frames: 0,
+            test_rng: 0x1234_5678,
+            midi_pulse: 0,
+            midi_ui_on: false,
         }
     }
 
@@ -179,6 +217,10 @@ impl Plugin for PulzePlugin {
     }
 
     fn note_on(&mut self, _time: u32, _channel: i16, key: i16, velocity: f64) {
+        // DEBUG: light the MIDI indicator on ANY note reaching the plugin —
+        // even keys that don't map to a pad — so it proves MIDI arrives at
+        // Pulze regardless of pad mapping. ~120 ms hold.
+        self.midi_pulse = (self.sample_rate * 0.12) as u32;
         if let Some(pad) = pads::pad_for_note(key, self.pad_count()) {
             self.trigger_pad(pad, key, velocity);
         }
@@ -226,6 +268,24 @@ impl Plugin for PulzePlugin {
     }
 
     fn on_message(&mut self, bytes: &[u8]) -> bool {
+        // UI pad audition: [0x21, on, note, vel]. Drummers hit pads in the
+        // plugin's own UI; the click posts this so the plugin plays the pad.
+        if bytes.len() == 4 && bytes[0] == 0x21 {
+            let key = bytes[2] as i16;
+            if bytes[1] != 0 {
+                self.midi_pulse = (self.sample_rate * 0.12) as u32;
+                if let Some(pad) = pads::pad_for_note(key, self.pad_count()) {
+                    self.trigger_pad(pad, key, bytes[3] as f64 / 127.0);
+                }
+            } else {
+                for v in &mut self.voices {
+                    if v.is_active() && v.note() == key as u8 {
+                        v.release();
+                    }
+                }
+            }
+            return true;
+        }
         match self.assembler.push(bytes) {
             AssembleResult::Complete { slot, sample } => {
                 let pad = slot as usize;
@@ -302,8 +362,18 @@ impl Plugin for PulzePlugin {
                 sum_r += r;
             }
 
-            out.output_l[i] = soft_clip(sum_l * master);
-            out.output_r[i] = soft_clip(sum_r * master);
+            // TEMP TEST: white-noise burst for a triggered pad with no
+            // sample (−20 dB, bypasses master).
+            let mut extra = 0.0f32;
+            if self.test_noise_frames > 0 {
+                self.test_noise_frames -= 1;
+                self.test_rng ^= self.test_rng << 13;
+                self.test_rng ^= self.test_rng >> 17;
+                self.test_rng ^= self.test_rng << 5;
+                extra += ((self.test_rng as f32 / u32::MAX as f32) * 2.0 - 1.0) * 0.1;
+            }
+            out.output_l[i] = soft_clip(sum_l * master + extra);
+            out.output_r[i] = soft_clip(sum_r * master + extra);
         }
         // Zero any tail the host asked for beyond our min() guard.
         for i in frames..out.output_l.len() {
@@ -311,6 +381,15 @@ impl Plugin for PulzePlugin {
         }
         for i in frames..out.output_r.len() {
             out.output_r[i] = 0.0;
+        }
+        // DEBUG MIDI indicator: age the pulse by this block, and push the
+        // on/off state to the UI only when it changes (so a held stream of
+        // notes keeps the light on without flooding the webview channel).
+        self.midi_pulse = self.midi_pulse.saturating_sub(frames as u32);
+        let active = self.midi_pulse > 0;
+        if active != self.midi_ui_on {
+            self.midi_ui_on = active;
+            ctx.send_to_ui(&encode_activity(MIDI_ACTIVITY_ID, if active { 1.0 } else { 0.0 }));
         }
         ProcessStatus::Continue
     }

@@ -346,6 +346,19 @@ pub trait Plugin: Sized + 'static {
     fn on_message(&mut self, _bytes: &[u8]) -> bool {
         false
     }
+
+    /// Extra plugin state to persist ALONGSIDE the automatic param (PLST)
+    /// state — e.g. a sampler's loaded PCM. Returned bytes are appended to
+    /// the `clap.state` blob by the scaffold and handed back verbatim to
+    /// `load_extra_state` on project load, in ANY host. Default: none.
+    fn save_extra_state(&self) -> alloc::vec::Vec<u8> {
+        alloc::vec::Vec::new()
+    }
+
+    /// Restore the bytes previously returned by `save_extra_state` (the
+    /// tail of the `clap.state` blob after the PLST param block). Default:
+    /// ignore.
+    fn load_extra_state(&mut self, _bytes: &[u8]) {}
 }
 
 /// Safe view onto one block of audio passed by the host.
