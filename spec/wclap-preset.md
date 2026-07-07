@@ -127,3 +127,53 @@ first-class in that same catalog.
 
 See `Plinken/docs/sound-library-nks.md` for the online library (API + R2 + D1),
 the D1 index schema, and the ingest/query pipeline.
+
+## 5. Packaging & distribution — right form per layer
+
+Four artifacts, four right forms. The split follows what each layer *is*, not one
+blanket format. **The market API/server is never published — it stays private in
+`taluvi-mono/market`.** Everything below is open-source-safe (no credentials).
+
+| Layer | What it is | Ship as |
+|---|---|---|
+| **Browser** | Svelte 5 DOM component (part of the synth GUI) | **npm** — `@plinken/library-browser` (+ a framework-agnostic `mount()`). **Not** a wasm component — it's UI. |
+| **Preset contract + mock** | Pure TS types (Listing/facets) + `MarketClient` + mock | **npm** — `@plinken/wclap-preset` (types later *generated from the WIT*). |
+| **NKSF codec** | Pure, deterministic parse/encode `.nksf` → NISI/PLID/PCHK + facets | **WASM WIT component** (see below), transpiled to JS (jco) for the browser, used natively (wasmtime) in the runner. |
+| **CLAP host/plugin state** | `clap.state` / `preset-load` / `remote-controls` | **Stays CLAP C-ABI core wasm** — WCLAP is *not* the Component Model; do not rewrite as WIT. |
+| **Market API/server** | D1 schema, auth, payouts | **PRIVATE** (`taluvi-mono/market`) — never published. |
+
+### Why the NKSF codec is the one good WIT-component candidate
+The codec is pure, language-agnostic, sandboxable logic with a typed boundary —
+exactly what the **Component Model** is for, and it converges with q64/qubepods,
+which already live in that world. Define one WIT world and implement it once:
+
+```wit
+// wit/nksf.wit  (illustrative)
+package plinken:nksf@0.1.0;
+world nksf {
+  record nks-meta { device-type: string; bankchain: list<string>;
+                    types: list<list<string>>; modes: list<string>;
+                    author: string; vendor: string; }
+  record parsed { meta: nks-meta; plugin-id: plid; pchk: list<u8>; }
+  export parse:  func(bytes: list<u8>) -> result<parsed, string>;
+  export encode: func(meta: nks-meta, plugin-id: plid, pchk: list<u8>) -> list<u8>;
+}
+```
+
+Then: Rust impl → component; **jco transpile** → JS for the browser/harness;
+native use in the runner (wasmtime, already embedded). The TS `Listing`/facet
+types and the Rust structs are **generated from the WIT records**, so both stay
+in lockstep — the codec is written once, not twice.
+
+### What NOT to force into WIT
+- **The browser** — DOM UI belongs in npm, not a wasm component.
+- **The CLAP host/plugin ABI** — both engines already run WCLAP as C-ABI core
+  wasm via `wclap-host-js` / wasmtime; the CLAP structs and function-pointer
+  table are not WIT. Wrapping the state extension in the Component Model would
+  break the ABI both engines depend on.
+
+### Sequencing
+Ship `@plinken/wclap-preset` (TS types + mock, done) and `@plinken/library-browser`
+now for the mock-driven browser; converge the **codec** to the WIT component when
+the real NKSF parse lands — implement it in Rust once, expose via WIT, jco for JS.
+Avoids writing the codec twice (JS + Rust).
