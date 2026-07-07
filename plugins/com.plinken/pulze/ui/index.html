@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pulze</title>
+<link rel="stylesheet" href="../widgets/widgets.css">
+<style>
+  .root { width: 100%; height: 100%; box-sizing: border-box; display: grid; align-items: center; }
+  .root.expanded { grid-template-rows: auto 1fr; padding: 12px 16px; gap: 8px; }
+  .root.expanded .title { text-align: center; font-size: 0.78rem; }
+  .body { display: flex; align-items: center; gap: 16px; justify-content: center; }
+  .hint {
+    max-width: 200px; font-size: 0.62rem; line-height: 1.5;
+    color: var(--text-dim);
+  }
+  .root.compact { grid-template-columns: max-content 1fr; gap: 8px; padding: 0 8px; --pot-size: 28px; }
+  .root.compact .title { display: none; }
+  .root.compact .hint { display: none; }
+  .root.compact .pot-label, .root.compact .pot-readout { display: none; }
+</style>
+</head>
+<body>
+<div class="root expanded" id="root">
+  <div class="title">Pulze</div>
+  <div class="body">
+    <div id="master"></div>
+    <div class="hint">
+      Pads live on the DAW's pad grid (PADS button on the instrument tile)
+      — drop audio assets there. MIDI notes trigger pads on the classic
+      Akai MPC layout (kick 36, snare 38, hats 42/46).
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { Pot } from '../widgets/pot.mjs';
+  import { Transport } from '../widgets/transport.mjs';
+
+  // Param ids — must match plugins/com.plinken/pulze build.rs codegen.
+  const PID_MASTER = 0;
+  const transport = new Transport();
+
+  const master = new Pot(document.getElementById('master'),
+    { id: PID_MASTER, min: 0, max: 1, default: 0.8, label: 'Master',
+      format: (v) => `${Math.round(v * 100)}%` });
+  master.onChange((v, id) => transport.sendSet(id, v));
+
+  transport.onSnapshot((params) => {
+    for (const [id, value] of params) {
+      if (id === PID_MASTER) master.setValueFromHost(value);
+    }
+  });
+  transport.sendReady();
+
+  function applyLayout() {
+    const root = document.getElementById('root');
+    const compact = window.innerWidth < 240 || window.innerHeight < 90;
+    root.classList.toggle('compact', compact);
+    root.classList.toggle('expanded', !compact);
+  }
+  applyLayout();
+  window.addEventListener('resize', applyLayout);
+</script>
+</body>
+</html>

@@ -3,7 +3,7 @@
   "id": "com.plinken.synome",
   "name": "Synome",
   "vendor": "Plinken",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Moog-style polysynth — 2 oscillators (FM, hard sync), ladder filter, 3 ADSRs, LFO, chorus/phaser/flanger, delay, reverb.",
   "features": ["instrument", "synthesizer"],
   "license": "MIT",
@@ -11,13 +11,16 @@
   "source": "src/",
   "artifact": "dist/synome.wclap.tar.gz",
   "format": "tar.gz",
-  "has_ui": false,
+  "has_ui": true,
+  "ui": {
+    "expanded_size": { "width": 940, "height": 470 }
+  },
   "plugins": [
     {
       "id": "com.plinken.synome",
       "name": "Synome",
       "features": ["instrument", "synthesizer"],
-      "has_ui": false
+      "has_ui": true
     }
   ]
 }

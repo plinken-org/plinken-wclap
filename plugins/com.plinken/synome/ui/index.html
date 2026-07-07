@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Synome</title>
+<link rel="stylesheet" href="../widgets/widgets.css">
+<style>
+  .root { width: 100%; height: 100%; box-sizing: border-box; display: grid; }
+  .root.expanded { grid-template-rows: auto 1fr; padding: 10px 14px; gap: 6px; }
+  .root.expanded .title { text-align: center; font-size: 0.78rem; }
+  .body { display: flex; flex-direction: column; gap: 10px; }
+  .row { display: flex; align-items: stretch; gap: 12px; justify-content: center; }
+  .section {
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    padding: 6px 10px; border: 1px solid var(--border-soft); border-radius: 8px;
+  }
+  .section-name { font-size: 0.6rem; color: var(--text-dim); letter-spacing: 0.06em; }
+  .pots { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .toggles { display: flex; align-items: center; gap: 8px; }
+
+  /* Expanded-only UI — the catalog declares no compact size, so the DAW
+     shows a name tile in the chain and opens this in the floating panel. */
+</style>
+</head>
+<body>
+<div class="root expanded" id="root">
+  <div class="title">Synome</div>
+  <div class="body">
+    <div class="row">
+      <div class="section">
+        <div class="section-name">OSC 1</div>
+        <div class="pots">
+          <div id="o1-mode"></div><div id="o1-shape"></div><div id="o1-coarse"></div>
+          <div id="o1-fine"></div><div id="o1-fm"></div>
+        </div>
+        <div class="toggles">
+          <div id="o1-mod-lfo"></div><div id="o1-mod-env"></div>
+          <div id="o1-fm-env"></div><div id="o1-fm-lfo"></div>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-name">OSC 2</div>
+        <div class="pots">
+          <div id="o2-mode"></div><div id="o2-shape"></div><div id="o2-coarse"></div>
+          <div id="o2-fine"></div>
+        </div>
+        <div class="toggles">
+          <div id="o2-sync"></div><div id="o2-mod-lfo"></div><div id="o2-mod-env"></div>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-name">MIX</div>
+        <div class="pots">
+          <div id="mix-o1"></div><div id="mix-o2"></div><div id="mix-noise"></div>
+          <div id="smp-root"></div>
+        </div>
+        <div class="toggles"><div id="noise-type"></div></div>
+      </div>
+      <div class="section hide-compact">
+        <div class="section-name">PITCH</div>
+        <div class="pots"><div id="pitch-mod"></div><div id="glide"></div></div>
+        <div class="toggles"><div id="mono"></div><div id="legato"></div></div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="section">
+        <div class="section-name">FILTER</div>
+        <div class="pots">
+          <div id="f-mode"></div><div id="f-freq"></div><div id="f-res"></div>
+          <div id="f-key"></div><div id="f-env-amt"></div><div id="f-lfo-amt"></div>
+        </div>
+        <div class="toggles">
+          <div id="f-pole"></div><div id="f-env-on"></div><div id="f-lfo-on"></div>
+        </div>
+      </div>
+      <div class="section hide-compact">
+        <div class="section-name">AMP ENV</div>
+        <div class="pots">
+          <div id="ae-a"></div><div id="ae-d"></div><div id="ae-s"></div><div id="ae-r"></div>
+        </div>
+      </div>
+      <div class="section hide-compact">
+        <div class="section-name">FILTER ENV</div>
+        <div class="pots">
+          <div id="fe-a"></div><div id="fe-d"></div><div id="fe-s"></div><div id="fe-r"></div>
+        </div>
+      </div>
+      <div class="section hide-compact">
+        <div class="section-name">MOD ENV</div>
+        <div class="pots">
+          <div id="me-a"></div><div id="me-d"></div><div id="me-s"></div><div id="me-r"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="section hide-compact">
+        <div class="section-name">LFO</div>
+        <div class="pots"><div id="lfo-rate"></div><div id="lfo-shape"></div><div id="lfo-delay"></div></div>
+        <div class="toggles"><div id="lfo-retrig"></div></div>
+      </div>
+      <div class="section hide-compact">
+        <div class="section-name">MOD FX</div>
+        <div class="pots">
+          <div id="mfx-type"></div><div id="mfx-rate"></div><div id="mfx-depth"></div><div id="mfx-mix"></div>
+        </div>
+      </div>
+      <div class="section hide-compact">
+        <div class="section-name">SPACE</div>
+        <div class="pots">
+          <div id="sfx-type"></div><div id="sfx-time"></div><div id="sfx-amount"></div>
+          <div id="sfx-fb"></div><div id="sfx-damp"></div>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-name">OUTPUT</div>
+        <div class="pots">
+          <div id="out-vol"></div><div id="out-pan"></div><div id="out-drive"></div><div id="out-voices"></div>
+          <div id="out-tune"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { Pot } from '../widgets/pot.mjs';
+  import { Toggle } from '../widgets/toggle.mjs';
+  import { Transport } from '../widgets/transport.mjs';
+
+  // Param ids — must match plugins/com.plinken/synome/src/params.rs
+  // (ids 0–73 frozen; 74–76 = osc modes + sample root key).
+  const P = {
+    O1_SHAPE: 0, O1_COARSE: 1, O1_FINE: 2, O1_MOD_LFO: 3, O1_MOD_ENV: 4,
+    O1_FM: 5, O1_FM_ENV: 6, O1_FM_LFO: 7,
+    MIX_O1: 8, MIX_O2: 9, MIX_NOISE: 10, NOISE_TYPE: 11,
+    O2_SHAPE: 13, O2_COARSE: 14, O2_FINE: 15, O2_SYNC: 16, O2_MOD_LFO: 17, O2_MOD_ENV: 18,
+    F_MODE: 19, F_POLE: 20, F_RES: 21, F_FREQ: 22, F_ENV_ON: 23, F_LFO_ON: 24,
+    F_KEY: 25, F_ENV_AMT: 26, F_LFO_AMT: 27,
+    VOLUME: 28, MONO: 29, LEGATO: 30, PAN: 32, GLIDE: 33,
+    FE_A: 34, FE_D: 35, FE_S: 36, FE_R: 37,
+    AE_A: 38, AE_D: 39, AE_S: 40, AE_R: 41,
+    ME_A: 42, ME_D: 43, ME_S: 44, ME_R: 45,
+    LFO_RATE: 46, LFO_SHAPE: 48, LFO_RETRIG: 49, LFO_DELAY: 50,
+    MFX_TYPE: 51, MFX_RATE: 52, MFX_DEPTH: 53, MFX_MIX: 54,
+    SFX_TYPE: 55, SFX_TIME: 57, SFX_AMOUNT: 58, SFX_FB: 59, SFX_DAMP: 60,
+    PITCH_MOD: 68, DRIVE: 71, VOICES: 72, TUNE: 73,
+    O1_MODE: 74, O2_MODE: 75, SMP_ROOT: 76,
+  };
+
+  const transport = new Transport();
+  const el = (id) => document.getElementById(id);
+
+  const OSC_MODES = ['Anlg', 'WTbl', 'Gran', 'Phys', 'Smpl'];
+  const F_MODES = ['LP', 'BP', 'HP'];
+  const LFO_SHAPES = ['Sine', 'Tri', 'Saw', 'Sqr', 'S&H'];
+  const MFX_TYPES = ['Off', 'Chor', 'Phas', 'Flng'];
+  const SFX_TYPES = ['Off', 'Delay', 'Room', 'Hall'];
+  const VOICES = ['4', '8', '12', '16'];
+  const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const noteName = (v) => {
+    const n = Math.round(v);
+    return `${NOTE_NAMES[n % 12]}${Math.floor(n / 12) - 1}`;
+  };
+  const pct = (v) => `${Math.round(v * 100)}%`;
+  const hz = (v) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)}`);
+  const sec = (v) => (v < 1 ? `${Math.round(v * 1000)}ms` : `${v.toFixed(2)}s`);
+  const st = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(0)}st`;
+  const pick = (names) => (v) => names[Math.max(0, Math.min(names.length - 1, Math.round(v)))];
+
+  const pots = {
+    [P.O1_MODE]: new Pot(el('o1-mode'), { id: P.O1_MODE, min: 0, max: 4, default: 0, label: 'Mode', format: pick(OSC_MODES) }),
+    [P.O1_SHAPE]: new Pot(el('o1-shape'), { id: P.O1_SHAPE, min: 0, max: 1, default: 0, label: 'Shape', format: pct }),
+    [P.O1_COARSE]: new Pot(el('o1-coarse'), { id: P.O1_COARSE, min: -24, max: 24, default: 0, label: 'Coarse', format: st }),
+    [P.O1_FINE]: new Pot(el('o1-fine'), { id: P.O1_FINE, min: -100, max: 100, default: 0, label: 'Fine', format: (v) => `${v.toFixed(0)}c` }),
+    [P.O1_FM]: new Pot(el('o1-fm'), { id: P.O1_FM, min: 0, max: 1, default: 0, label: 'FM', format: pct }),
+    [P.O2_MODE]: new Pot(el('o2-mode'), { id: P.O2_MODE, min: 0, max: 4, default: 0, label: 'Mode', format: pick(OSC_MODES) }),
+    [P.O2_SHAPE]: new Pot(el('o2-shape'), { id: P.O2_SHAPE, min: 0, max: 1, default: 0, label: 'Shape', format: pct }),
+    [P.O2_COARSE]: new Pot(el('o2-coarse'), { id: P.O2_COARSE, min: -24, max: 24, default: 0, label: 'Coarse', format: st }),
+    [P.O2_FINE]: new Pot(el('o2-fine'), { id: P.O2_FINE, min: -100, max: 100, default: 0, label: 'Fine', format: (v) => `${v.toFixed(0)}c` }),
+    [P.MIX_O1]: new Pot(el('mix-o1'), { id: P.MIX_O1, min: 0, max: 1, default: 0.7, label: 'Osc 1', format: pct }),
+    [P.MIX_O2]: new Pot(el('mix-o2'), { id: P.MIX_O2, min: 0, max: 1, default: 0, label: 'Osc 2', format: pct }),
+    [P.MIX_NOISE]: new Pot(el('mix-noise'), { id: P.MIX_NOISE, min: 0, max: 1, default: 0, label: 'Noise', format: pct }),
+    [P.SMP_ROOT]: new Pot(el('smp-root'), { id: P.SMP_ROOT, min: 0, max: 127, default: 60, label: 'Root', format: noteName }),
+    [P.PITCH_MOD]: new Pot(el('pitch-mod'), { id: P.PITCH_MOD, min: 0, max: 24, default: 0, label: 'P.Mod', format: st }),
+    [P.GLIDE]: new Pot(el('glide'), { id: P.GLIDE, min: 0, max: 2000, default: 0, label: 'Glide', format: (v) => `${Math.round(v)}ms` }),
+    [P.F_MODE]: new Pot(el('f-mode'), { id: P.F_MODE, min: 0, max: 2, default: 0, label: 'Mode', format: pick(F_MODES) }),
+    [P.F_FREQ]: new Pot(el('f-freq'), { id: P.F_FREQ, min: 20, max: 20000, default: 20000, log: true, label: 'Freq', unit: 'Hz', format: hz }),
+    [P.F_RES]: new Pot(el('f-res'), { id: P.F_RES, min: 0, max: 1, default: 0, label: 'Res', format: pct }),
+    [P.F_KEY]: new Pot(el('f-key'), { id: P.F_KEY, min: 0, max: 1, default: 0, label: 'KeyTrk', format: pct }),
+    [P.F_ENV_AMT]: new Pot(el('f-env-amt'), { id: P.F_ENV_AMT, min: -1, max: 1, default: 0.5, label: 'EnvAmt', format: pct }),
+    [P.F_LFO_AMT]: new Pot(el('f-lfo-amt'), { id: P.F_LFO_AMT, min: 0, max: 1, default: 0, label: 'LfoAmt', format: pct }),
+    [P.AE_A]: new Pot(el('ae-a'), { id: P.AE_A, min: 0.001, max: 8, default: 0.01, log: true, label: 'A', format: sec }),
+    [P.AE_D]: new Pot(el('ae-d'), { id: P.AE_D, min: 0.001, max: 8, default: 0.1, log: true, label: 'D', format: sec }),
+    [P.AE_S]: new Pot(el('ae-s'), { id: P.AE_S, min: 0, max: 1, default: 0.7, label: 'S', format: pct }),
+    [P.AE_R]: new Pot(el('ae-r'), { id: P.AE_R, min: 0.001, max: 8, default: 0.3, log: true, label: 'R', format: sec }),
+    [P.FE_A]: new Pot(el('fe-a'), { id: P.FE_A, min: 0.001, max: 8, default: 0.01, log: true, label: 'A', format: sec }),
+    [P.FE_D]: new Pot(el('fe-d'), { id: P.FE_D, min: 0.001, max: 8, default: 0.3, log: true, label: 'D', format: sec }),
+    [P.FE_S]: new Pot(el('fe-s'), { id: P.FE_S, min: 0, max: 1, default: 0.3, label: 'S', format: pct }),
+    [P.FE_R]: new Pot(el('fe-r'), { id: P.FE_R, min: 0.001, max: 8, default: 0.3, log: true, label: 'R', format: sec }),
+    [P.ME_A]: new Pot(el('me-a'), { id: P.ME_A, min: 0.001, max: 8, default: 0.01, log: true, label: 'A', format: sec }),
+    [P.ME_D]: new Pot(el('me-d'), { id: P.ME_D, min: 0.001, max: 8, default: 0.3, log: true, label: 'D', format: sec }),
+    [P.ME_S]: new Pot(el('me-s'), { id: P.ME_S, min: 0, max: 1, default: 0.5, label: 'S', format: pct }),
+    [P.ME_R]: new Pot(el('me-r'), { id: P.ME_R, min: 0.001, max: 8, default: 0.3, log: true, label: 'R', format: sec }),
+    [P.LFO_RATE]: new Pot(el('lfo-rate'), { id: P.LFO_RATE, min: 0.01, max: 50, default: 1, log: true, label: 'Rate', format: (v) => `${v.toFixed(2)}Hz` }),
+    [P.LFO_SHAPE]: new Pot(el('lfo-shape'), { id: P.LFO_SHAPE, min: 0, max: 4, default: 0, label: 'Shape', format: pick(LFO_SHAPES) }),
+    [P.LFO_DELAY]: new Pot(el('lfo-delay'), { id: P.LFO_DELAY, min: 0, max: 2, default: 0, label: 'Delay', format: sec }),
+    [P.MFX_TYPE]: new Pot(el('mfx-type'), { id: P.MFX_TYPE, min: 0, max: 3, default: 0, label: 'Type', format: pick(MFX_TYPES) }),
+    [P.MFX_RATE]: new Pot(el('mfx-rate'), { id: P.MFX_RATE, min: 0.01, max: 10, default: 1, log: true, label: 'Rate', format: (v) => `${v.toFixed(2)}Hz` }),
+    [P.MFX_DEPTH]: new Pot(el('mfx-depth'), { id: P.MFX_DEPTH, min: 0, max: 1, default: 0.5, label: 'Depth', format: pct }),
+    [P.MFX_MIX]: new Pot(el('mfx-mix'), { id: P.MFX_MIX, min: 0, max: 1, default: 0.5, label: 'Mix', format: pct }),
+    [P.SFX_TYPE]: new Pot(el('sfx-type'), { id: P.SFX_TYPE, min: 0, max: 3, default: 0, label: 'Type', format: pick(SFX_TYPES) }),
+    [P.SFX_TIME]: new Pot(el('sfx-time'), { id: P.SFX_TIME, min: 0, max: 4, default: 0.5, label: 'Time', format: sec }),
+    [P.SFX_AMOUNT]: new Pot(el('sfx-amount'), { id: P.SFX_AMOUNT, min: 0, max: 1, default: 0.3, label: 'Amt', format: pct }),
+    [P.SFX_FB]: new Pot(el('sfx-fb'), { id: P.SFX_FB, min: 0, max: 0.95, default: 0.3, label: 'FB', format: pct }),
+    [P.SFX_DAMP]: new Pot(el('sfx-damp'), { id: P.SFX_DAMP, min: 0, max: 1, default: 0.5, label: 'Damp', format: pct }),
+    [P.VOLUME]: new Pot(el('out-vol'), { id: P.VOLUME, min: 0, max: 1, default: 0.7, label: 'Vol', format: pct }),
+    [P.PAN]: new Pot(el('out-pan'), { id: P.PAN, min: -1, max: 1, default: 0, label: 'Pan', format: (v) => (Math.abs(v) < 0.01 ? 'C' : v < 0 ? `L${Math.round(-v * 100)}` : `R${Math.round(v * 100)}`) }),
+    [P.DRIVE]: new Pot(el('out-drive'), { id: P.DRIVE, min: 0, max: 1, default: 0, label: 'Drive', format: pct }),
+    [P.VOICES]: new Pot(el('out-voices'), { id: P.VOICES, min: 0, max: 3, default: 2, label: 'Voices', format: pick(VOICES) }),
+    [P.TUNE]: new Pot(el('out-tune'), { id: P.TUNE, min: -100, max: 100, default: 0, label: 'Tune', format: (v) => `${v.toFixed(0)}c` }),
+  };
+
+  const toggles = {
+    [P.O1_MOD_LFO]: new Toggle(el('o1-mod-lfo'), { id: P.O1_MOD_LFO, default: 0, label: 'P.LFO' }),
+    [P.O1_MOD_ENV]: new Toggle(el('o1-mod-env'), { id: P.O1_MOD_ENV, default: 0, label: 'P.Env' }),
+    [P.O1_FM_ENV]: new Toggle(el('o1-fm-env'), { id: P.O1_FM_ENV, default: 0, label: 'FM.Env' }),
+    [P.O1_FM_LFO]: new Toggle(el('o1-fm-lfo'), { id: P.O1_FM_LFO, default: 0, label: 'FM.LFO' }),
+    [P.O2_SYNC]: new Toggle(el('o2-sync'), { id: P.O2_SYNC, default: 0, label: 'Sync' }),
+    [P.O2_MOD_LFO]: new Toggle(el('o2-mod-lfo'), { id: P.O2_MOD_LFO, default: 0, label: 'P.LFO' }),
+    [P.O2_MOD_ENV]: new Toggle(el('o2-mod-env'), { id: P.O2_MOD_ENV, default: 0, label: 'P.Env' }),
+    [P.NOISE_TYPE]: new Toggle(el('noise-type'), { id: P.NOISE_TYPE, default: 0, label: 'Pink' }),
+    [P.MONO]: new Toggle(el('mono'), { id: P.MONO, default: 0, label: 'Mono' }),
+    [P.LEGATO]: new Toggle(el('legato'), { id: P.LEGATO, default: 0, label: 'Legato' }),
+    [P.F_POLE]: new Toggle(el('f-pole'), { id: P.F_POLE, default: 1, label: '4-Pole' }),
+    [P.F_ENV_ON]: new Toggle(el('f-env-on'), { id: P.F_ENV_ON, default: 0, label: 'Env' }),
+    [P.F_LFO_ON]: new Toggle(el('f-lfo-on'), { id: P.F_LFO_ON, default: 0, label: 'LFO' }),
+    [P.LFO_RETRIG]: new Toggle(el('lfo-retrig'), { id: P.LFO_RETRIG, default: 0, label: 'Retrig' }),
+  };
+
+  const widgets = new Map();
+  for (const [id, w] of Object.entries(pots)) widgets.set(Number(id), w);
+  for (const [id, w] of Object.entries(toggles)) widgets.set(Number(id), w);
+  for (const w of widgets.values()) w.onChange((v, id) => transport.sendSet(id, v));
+
+  transport.onSnapshot((params) => {
+    for (const [id, value] of params) {
+      const w = widgets.get(id);
+      if (w) w.setValueFromHost(value);
+    }
+  });
+  transport.sendReady();
+</script>
+</body>
+</html>

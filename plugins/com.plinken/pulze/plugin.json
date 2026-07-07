@@ -3,7 +3,7 @@
   "id": "com.plinken.pulze",
   "name": "Pulze",
   "vendor": "Plinken",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MPC-style drum machine — dynamic 4×4 pad banks, classic Akai note layout, sample pads with tune/AD/filter and mute groups.",
   "features": ["instrument", "drum-machine"],
   "license": "MIT",
@@ -11,13 +11,17 @@
   "source": "src/",
   "artifact": "dist/pulze.wclap.tar.gz",
   "format": "tar.gz",
-  "has_ui": false,
+  "has_ui": true,
+  "ui": {
+    "compact_size": { "width": 260, "height": 56 },
+    "expanded_size": { "width": 460, "height": 170 }
+  },
   "plugins": [
     {
       "id": "com.plinken.pulze",
       "name": "Pulze",
       "features": ["instrument", "drum-machine"],
-      "has_ui": false
+      "has_ui": true
     }
   ]
 }
