@@ -15,7 +15,7 @@
 //! That's it — see `plugins/com.plinken/synome/src/lib.rs` for the
 //! reference shape.
 
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 // Single-threaded wasm: writing static mut once in `_initialize` and reading
 // after is sound in this context.
 #![allow(non_upper_case_globals, static_mut_refs)]
@@ -47,6 +47,9 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 // info, plugin struct, etc.).
 // ---------------------------------------------------------------------------
 
+// wasm32-only: on a native target this `#[no_mangle]` would shadow libc's
+// malloc and crash anything that links it (e.g. the test harness).
+#[cfg(target_arch = "wasm32")]
 #[no_mangle]
 pub extern "C" fn malloc(size: u32) -> u32 {
     use alloc::alloc::{alloc, Layout};
@@ -60,6 +63,14 @@ pub extern "C" fn malloc(size: u32) -> u32 {
         let layout = Layout::from_size_align_unchecked(size as usize, 8);
         alloc(layout) as u32
     }
+}
+
+/// Native stand-in so the crate compiles for tests — the CLAP entry points
+/// that allocate are never exercised off-wasm. 64-bit pointers don't fit
+/// the u32 ABI anyway, so this always reports allocation failure.
+#[cfg(not(target_arch = "wasm32"))]
+fn malloc(_size: u32) -> u32 {
+    0
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +101,38 @@ mod offsets {
         pub const AUDIO_OUTPUTS: usize = 20;
         pub const AUDIO_INPUTS_COUNT: usize = 24;
         pub const AUDIO_OUTPUTS_COUNT: usize = 28;
+        pub const IN_EVENTS: usize = 32;
+        pub const OUT_EVENTS: usize = 36;
+    }
+    pub mod input_events {
+        // clap_input_events — ctx + two host-stub fn-table indices.
+        pub const CTX: usize = 0;
+        pub const SIZE_FN: usize = 4; // u32(list*)
+        pub const GET: usize = 8;     // event*(list*, u32 index)
+    }
+    pub mod event_header {
+        // clap_event_header — leads every event struct.
+        pub const SIZE: usize = 0;     // u32 — total event size incl. header
+        pub const TIME: usize = 4;     // u32 — frame offset within the block
+        pub const SPACE_ID: usize = 8; // u16
+        pub const TYPE: usize = 10;    // u16
+        pub const FLAGS: usize = 12;   // u32
+        pub const LEN: usize = 16;
+    }
+    pub mod event_note {
+        // clap_event_note — 16-byte header + body, f64 velocity 8-aligned.
+        pub const NOTE_ID: usize = 16;  // i32, -1 = unspecified
+        pub const PORT: usize = 20;     // i16
+        pub const CHANNEL: usize = 22;  // i16
+        pub const KEY: usize = 24;      // i16
+        pub const VELOCITY: usize = 32; // f64, 0.0..1.0
+        pub const SIZE: usize = 40;
+    }
+    pub mod event_param_value {
+        // clap_event_param_value — value f64 padded out to offset 40.
+        pub const PARAM_ID: usize = 16; // u32
+        pub const VALUE: usize = 40;    // f64
+        pub const SIZE: usize = 48;
     }
     pub mod audio_buffer {
         pub const DATA32: usize = 0;
@@ -179,6 +222,12 @@ pub const PARAM_IS_AUTOMATABLE: u32 = 1 << 5;
 
 const NOTE_DIALECT_CLAP: u32 = 1 << 0;
 const NOTE_DIALECT_MIDI: u32 = 1 << 1;
+
+// clap_event_header.type values (CLAP core event space).
+const EVT_NOTE_ON: u16 = 0;
+const EVT_NOTE_OFF: u16 = 1;
+const EVT_NOTE_CHOKE: u16 = 2;
+const EVT_PARAM_VALUE: u16 = 5;
 
 const PORT_FLAG_IS_MAIN: u32 = 1;
 
@@ -274,6 +323,29 @@ pub trait Plugin: Sized + 'static {
     fn latency_samples(&self) -> u32 {
         0
     }
+
+    /// Note-on from the host's event queue. `time` is the frame offset
+    /// within the upcoming block (hosts stamp 0 today); `velocity` is
+    /// 0.0..=1.0. Events are dispatched in queue order *before* the
+    /// block's `process` call — trigger state here, render in `process`.
+    fn note_on(&mut self, _time: u32, _channel: i16, _key: i16, _velocity: f64) {}
+
+    /// Note-off counterpart of [`Plugin::note_on`].
+    fn note_off(&mut self, _time: u32, _channel: i16, _key: i16, _velocity: f64) {}
+
+    /// Immediate silencing (drum choke / voice steal). `key == -1` means
+    /// "all notes". Default: treat as a note-off.
+    fn note_choke(&mut self, time: u32, channel: i16, key: i16) {
+        self.note_off(time, channel, key, 0.0);
+    }
+
+    /// A `webview.receive` payload that isn't one of the scaffold's
+    /// built-in shapes ("ready" handshake, `{set:[id,value]}`). Bulk
+    /// data — e.g. sample-transfer chunks — arrives here. Return `true`
+    /// if the message was recognized.
+    fn on_message(&mut self, _bytes: &[u8]) -> bool {
+        false
+    }
 }
 
 /// Safe view onto one block of audio passed by the host.
@@ -317,6 +389,21 @@ impl ProcessCtx {
             Some(StereoIo {
                 input_l: core::slice::from_raw_parts(il, n),
                 input_r: core::slice::from_raw_parts(ir, n),
+                output_l: core::slice::from_raw_parts_mut(ol, n),
+                output_r: core::slice::from_raw_parts_mut(or_, n),
+            })
+        }
+    }
+
+    /// Borrow the main stereo *output* only — the shape for instruments,
+    /// which declare `audio_inputs: 0` and so get `None` from
+    /// [`ProcessCtx::stereo_io`]. Returns `None` if output port 0 lacks
+    /// two channels.
+    pub fn stereo_out(&mut self) -> Option<StereoOut<'_>> {
+        unsafe {
+            let (ol, n) = channel_slice(self.process_ptr, false, 0, 0, true)?;
+            let (or_, _) = channel_slice(self.process_ptr, false, 0, 1, true)?;
+            Some(StereoOut {
                 output_l: core::slice::from_raw_parts_mut(ol, n),
                 output_r: core::slice::from_raw_parts_mut(or_, n),
             })
@@ -380,6 +467,12 @@ pub struct StereoIo<'a> {
 pub struct MonoIo<'a> {
     pub input: &'a [f32],
     pub output: &'a mut [f32],
+}
+
+/// Two-slice view of one stereo output block (instruments).
+pub struct StereoOut<'a> {
+    pub output_l: &'a mut [f32],
+    pub output_r: &'a mut [f32],
 }
 
 /// Zero every output channel of the current block. Convenience for "I'm
@@ -595,6 +688,10 @@ struct VTable {
     get_param: Option<fn(*mut (), u32) -> f64>,
     set_param: Option<fn(*mut (), u32, f64)>,
     latency_samples: Option<fn(*mut ()) -> u32>,
+    note_on: Option<fn(*mut (), u32, i16, i16, f64)>,
+    note_off: Option<fn(*mut (), u32, i16, i16, f64)>,
+    note_choke: Option<fn(*mut (), u32, i16, i16)>,
+    on_message: Option<fn(*mut (), *const u8, usize) -> bool>,
 }
 
 static mut VTABLE: VTable = VTable {
@@ -609,6 +706,10 @@ static mut VTABLE: VTable = VTable {
     get_param: None,
     set_param: None,
     latency_samples: None,
+    note_on: None,
+    note_off: None,
+    note_choke: None,
+    on_message: None,
 };
 
 // `clap_entry` itself is declared above as the actual ClapEntry struct;
@@ -677,6 +778,10 @@ pub fn init_plugin<P: Plugin>(def: &'static PluginDef) {
         VTABLE.get_param = Some(thunk_get_param::<P>);
         VTABLE.set_param = Some(thunk_set_param::<P>);
         VTABLE.latency_samples = Some(thunk_latency_samples::<P>);
+        VTABLE.note_on = Some(thunk_note_on::<P>);
+        VTABLE.note_off = Some(thunk_note_off::<P>);
+        VTABLE.note_choke = Some(thunk_note_choke::<P>);
+        VTABLE.on_message = Some(thunk_on_message::<P>);
 
         // clap.latency is unconditionally exposed; plugins that don't
         // override `latency_samples()` simply report 0.
@@ -754,6 +859,23 @@ fn thunk_set_param<P: Plugin>(p: *mut (), id: u32, value: f64) {
 
 fn thunk_latency_samples<P: Plugin>(p: *mut ()) -> u32 {
     unsafe { (*(p as *const P)).latency_samples() }
+}
+
+fn thunk_note_on<P: Plugin>(p: *mut (), time: u32, channel: i16, key: i16, velocity: f64) {
+    unsafe { (*(p as *mut P)).note_on(time, channel, key, velocity) }
+}
+
+fn thunk_note_off<P: Plugin>(p: *mut (), time: u32, channel: i16, key: i16, velocity: f64) {
+    unsafe { (*(p as *mut P)).note_off(time, channel, key, velocity) }
+}
+
+fn thunk_note_choke<P: Plugin>(p: *mut (), time: u32, channel: i16, key: i16) {
+    unsafe { (*(p as *mut P)).note_choke(time, channel, key) }
+}
+
+fn thunk_on_message<P: Plugin>(p: *mut (), ptr: *const u8, len: usize) -> bool {
+    let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+    unsafe { (*(p as *mut P)).on_message(bytes) }
 }
 
 // ---------------------------------------------------------------------------
@@ -1031,11 +1153,90 @@ extern "C" fn plugin_reset(plugin_ptr: u32) {
     }
 }
 
+/// Walk a `clap_input_events` list, dispatching PARAM_VALUE events to
+/// `set_param` and note events to the note hooks, in queue order. Unknown
+/// event types are skipped via the header's own size field — never assume
+/// a fixed stride. `list_ptr == 0` is a no-op.
+unsafe fn dispatch_in_events(data: *mut (), list_ptr: u32) {
+    if list_ptr == 0 || data.is_null() {
+        return;
+    }
+    let size_idx = read_u32(list_ptr + offsets::input_events::SIZE_FN as u32);
+    let get_idx = read_u32(list_ptr + offsets::input_events::GET as u32);
+    if size_idx == 0 || get_idx == 0 {
+        return;
+    }
+    type SizeFn = extern "C" fn(list: u32) -> u32;
+    type GetFn = extern "C" fn(list: u32, index: u32) -> u32;
+    let size_fn: SizeFn = core::mem::transmute(size_idx as usize);
+    let get_fn: GetFn = core::mem::transmute(get_idx as usize);
+
+    let count = size_fn(list_ptr);
+    for i in 0..count {
+        let ev = get_fn(list_ptr, i);
+        if ev == 0 {
+            continue;
+        }
+        let ev_size = read_u32(ev + offsets::event_header::SIZE as u32) as usize;
+        let ev_type =
+            core::ptr::read_unaligned((ev + offsets::event_header::TYPE as u32) as *const u16);
+        let time = read_u32(ev + offsets::event_header::TIME as u32);
+        match ev_type {
+            EVT_NOTE_ON | EVT_NOTE_OFF | EVT_NOTE_CHOKE => {
+                if ev_size < offsets::event_note::SIZE {
+                    continue;
+                }
+                let channel = core::ptr::read_unaligned(
+                    (ev + offsets::event_note::CHANNEL as u32) as *const i16,
+                );
+                let key =
+                    core::ptr::read_unaligned((ev + offsets::event_note::KEY as u32) as *const i16);
+                let velocity = core::ptr::read_unaligned(
+                    (ev + offsets::event_note::VELOCITY as u32) as *const f64,
+                );
+                match ev_type {
+                    EVT_NOTE_ON => {
+                        if let Some(f) = VTABLE.note_on {
+                            f(data, time, channel, key, velocity);
+                        }
+                    }
+                    EVT_NOTE_OFF => {
+                        if let Some(f) = VTABLE.note_off {
+                            f(data, time, channel, key, velocity);
+                        }
+                    }
+                    _ => {
+                        if let Some(f) = VTABLE.note_choke {
+                            f(data, time, channel, key);
+                        }
+                    }
+                }
+            }
+            EVT_PARAM_VALUE => {
+                if ev_size < offsets::event_param_value::SIZE {
+                    continue;
+                }
+                let id = read_u32(ev + offsets::event_param_value::PARAM_ID as u32);
+                let value = core::ptr::read_unaligned(
+                    (ev + offsets::event_param_value::VALUE as u32) as *const f64,
+                );
+                if let Some(f) = VTABLE.set_param {
+                    f(data, id, value);
+                }
+            }
+            _ => {} // MIDI (10) and anything newer: skipped for now.
+        }
+    }
+}
+
 extern "C" fn plugin_process(plugin_ptr: u32, process: u32) -> u32 {
     let mut ctx = ProcessCtx { process_ptr: process };
     let status = unsafe {
+        let data = read_plugin_data(plugin_ptr);
+        let in_events = read_u32(process + offsets::process_::IN_EVENTS as u32);
+        dispatch_in_events(data, in_events);
         match VTABLE.process {
-            Some(f) => f(read_plugin_data(plugin_ptr), &mut ctx),
+            Some(f) => f(data, &mut ctx),
             None => ProcessStatus::Sleep,
         }
     };
@@ -1246,11 +1447,30 @@ extern "C" fn webview_get_resource(
     0
 }
 
-/// `webview.receive(plugin, buf, size)` — bytes from the UI iframe.
-/// We accept the simple `{set:[<u32 id>, <f64 value>]}` CBOR shape used by
-/// the auto-pan / vocal-* UIs (see widgets/cbor.mjs). Anything else is
-/// silently dropped — extending the protocol means adding parsers here.
+/// `webview.receive(plugin, buf, size)` — bytes from the UI iframe (or the
+/// app via `pluginMessage`). Built-in shapes: the `"ready"` handshake and
+/// `{set:[<u32 id>, <f64 value>]}` (see widgets/cbor.mjs). Everything else
+/// is handed to `Plugin::on_message` — bulk payloads like sample-transfer
+/// chunks arrive that way.
+///
+/// The host copies the message into our memory via our exported `malloc`
+/// (8-aligned, exact size) and never frees it. Small param traffic leaking
+/// a few bytes is tolerable; multi-hundred-KiB sample chunks are not — so
+/// payloads above `FREE_THRESHOLD` are deallocated here after handling.
 extern "C" fn webview_receive(plugin_ptr: u32, buf_ptr: u32, size: u32) -> u32 {
+    const FREE_THRESHOLD: u32 = 4096;
+    let ret = webview_receive_inner(plugin_ptr, buf_ptr, size);
+    if size > FREE_THRESHOLD && buf_ptr != 0 {
+        unsafe {
+            use alloc::alloc::{dealloc, Layout};
+            let layout = Layout::from_size_align_unchecked(size as usize, 8);
+            dealloc(buf_ptr as *mut u8, layout);
+        }
+    }
+    ret
+}
+
+fn webview_receive_inner(plugin_ptr: u32, buf_ptr: u32, size: u32) -> u32 {
     let p = buf_ptr as *const u8;
     // Ready: text(5) "ready" — the UI just (re)opened on its hardcoded
     // defaults. Reply with a full param snapshot ({params:{id:value}})
@@ -1268,40 +1488,38 @@ extern "C" fn webview_receive(plugin_ptr: u32, buf_ptr: u32, size: u32) -> u32 {
             }
         }
     }
-    if size < 20 {
-        return 1;
-    }
+    // Anything that isn't the exact {set:[id,value]} shape below falls
+    // through to Plugin::on_message.
     unsafe {
-        // 0xa1 = map(1)
-        if *p != 0xa1 {
-            return 1;
-        }
-        // 0x63 "set"
-        if *p.add(1) != 0x63 || *p.add(2) != 0x73 || *p.add(3) != 0x65 || *p.add(4) != 0x74 {
-            return 1;
-        }
-        // 0x82 = array(2)
-        if *p.add(5) != 0x82 {
-            return 1;
-        }
-        // 0x1a = u32; then 4 big-endian bytes
-        if *p.add(6) != 0x1a {
-            return 1;
-        }
-        let id = u32::from_be_bytes([*p.add(7), *p.add(8), *p.add(9), *p.add(10)]);
-        // 0xfb = f64; then 8 big-endian bytes
-        if *p.add(11) != 0xfb {
-            return 1;
-        }
-        let mut vbytes = [0u8; 8];
-        for i in 0..8 {
-            vbytes[i] = *p.add(12 + i);
-        }
-        let value = f64::from_be_bytes(vbytes);
+        let is_set_msg = size >= 20
+            && *p == 0xa1 // map(1)
+            && *p.add(1) == 0x63 // text(3) "set"
+            && *p.add(2) == 0x73
+            && *p.add(3) == 0x65
+            && *p.add(4) == 0x74
+            && *p.add(5) == 0x82 // array(2)
+            && *p.add(6) == 0x1a // u32 (4 BE bytes follow)
+            && *p.add(11) == 0xfb; // f64 (8 BE bytes follow)
+        if is_set_msg {
+            let id = u32::from_be_bytes([*p.add(7), *p.add(8), *p.add(9), *p.add(10)]);
+            let mut vbytes = [0u8; 8];
+            for i in 0..8 {
+                vbytes[i] = *p.add(12 + i);
+            }
+            let value = f64::from_be_bytes(vbytes);
 
-        let data = read_plugin_data(plugin_ptr);
-        if let Some(f) = VTABLE.set_param {
-            f(data, id, value);
+            let data = read_plugin_data(plugin_ptr);
+            if let Some(f) = VTABLE.set_param {
+                f(data, id, value);
+            }
+            return 1;
+        }
+
+        if size > 0 && buf_ptr != 0 {
+            let data = read_plugin_data(plugin_ptr);
+            if let Some(f) = VTABLE.on_message {
+                f(data, p, size as usize);
+            }
         }
     }
     1
@@ -1387,12 +1605,17 @@ extern "C" fn params_text_to_value(
 }
 
 extern "C" fn params_flush(
-    _plugin_ptr: u32,
-    _in_events_ptr: u32,
+    plugin_ptr: u32,
+    in_events_ptr: u32,
     _out_events_ptr: u32,
 ) {
-    // No-op for Stage A — UI param changes arrive through webview.receive,
-    // not the event queue. DAW-driven automation events come in Stage B.
+    // The host marshals its single event queue through flush whenever audio
+    // isn't running, so this walks the same list `plugin_process` does.
+    // Note hooks fire from here too — deliberate: triggering a voice while
+    // stopped is harmless, silently dropping the note is not.
+    unsafe {
+        dispatch_in_events(read_plugin_data(plugin_ptr), in_events_ptr);
+    }
 }
 
 extern "C" fn latency_get(plugin_ptr: u32) -> u32 {
@@ -1543,32 +1766,40 @@ extern "C" fn state_load(plugin_ptr: u32, istream_ptr: u32) -> u32 {
     1
 }
 
+/// CBOR map header for `n` entries: short form (≤23), 1-byte length form
+/// (≤255), or 2-byte length form (≤65535).
+fn push_cbor_map_header(buf: &mut alloc::vec::Vec<u8>, n: u32) {
+    if n <= 23 {
+        buf.push(0xa0 | (n as u8));
+    } else if n <= 255 {
+        buf.push(0xb8);
+        buf.push(n as u8);
+    } else {
+        buf.push(0xb9);
+        buf.extend_from_slice(&(n as u16).to_be_bytes());
+    }
+}
+
 /// Push the full param surface to the plugin's UI as a CBOR
 /// `{params:{<id>:<f64>, …}}` snapshot via `clap_host_webview.send`.
 /// No-op when the host didn't expose the webview ext or there are no
-/// params. Map header uses the short form (≤23 entries) or the 1-byte
-/// length form (≤255).
+/// params. Handles up to 65535 params (Pulze's per-pad surface is ~770).
 fn push_params_snapshot(plugin_ptr: u32) {
     unsafe {
         let host = DEF.host_ptr;
         let send_idx = DEF.host_webview_send;
         let n = DEF.params_len;
         let Some(get) = VTABLE.get_param else { return };
-        if host == 0 || send_idx == 0 || n == 0 || n > 255 {
+        if host == 0 || send_idx == 0 || n == 0 || n > 65535 {
             return;
         }
         let data = read_plugin_data(plugin_ptr);
         let mut buf: alloc::vec::Vec<u8> =
-            alloc::vec::Vec::with_capacity(10 + n as usize * 14);
+            alloc::vec::Vec::with_capacity(12 + n as usize * 14);
         buf.push(0xa1);
         buf.push(0x66);
         buf.extend_from_slice(b"params");
-        if n <= 23 {
-            buf.push(0xa0 | (n as u8));
-        } else {
-            buf.push(0xb8);
-            buf.push(n as u8);
-        }
+        push_cbor_map_header(&mut buf, n);
         for i in 0..n {
             let Some(def) = param_def(i) else { continue };
             buf.push(0x1a);
@@ -1579,5 +1810,68 @@ fn push_params_snapshot(plugin_ptr: u32) {
         type Send = extern "C" fn(host: u32, buf: u32, size: u32) -> u32;
         let f: Send = core::mem::transmute(send_idx as usize);
         f(host, buf.as_ptr() as u32, buf.len() as u32);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Event-struct offsets must mirror `wclap-host/src/clap.rs` — the
+    /// host builds these structs, we read them. A drift here is silent
+    /// data corruption, so pin every constant.
+    #[test]
+    fn event_offsets_match_clap_abi() {
+        assert_eq!(offsets::process_::IN_EVENTS, 32);
+        assert_eq!(offsets::process_::OUT_EVENTS, 36);
+        assert_eq!(offsets::input_events::CTX, 0);
+        assert_eq!(offsets::input_events::SIZE_FN, 4);
+        assert_eq!(offsets::input_events::GET, 8);
+        assert_eq!(offsets::event_header::SIZE, 0);
+        assert_eq!(offsets::event_header::TIME, 4);
+        assert_eq!(offsets::event_header::SPACE_ID, 8);
+        assert_eq!(offsets::event_header::TYPE, 10);
+        assert_eq!(offsets::event_header::FLAGS, 12);
+        assert_eq!(offsets::event_header::LEN, 16);
+        assert_eq!(offsets::event_note::NOTE_ID, 16);
+        assert_eq!(offsets::event_note::PORT, 20);
+        assert_eq!(offsets::event_note::CHANNEL, 22);
+        assert_eq!(offsets::event_note::KEY, 24);
+        assert_eq!(offsets::event_note::VELOCITY, 32);
+        assert_eq!(offsets::event_note::SIZE, 40);
+        assert_eq!(offsets::event_param_value::PARAM_ID, 16);
+        assert_eq!(offsets::event_param_value::VALUE, 40);
+        assert_eq!(offsets::event_param_value::SIZE, 48);
+        assert_eq!(EVT_NOTE_ON, 0);
+        assert_eq!(EVT_NOTE_OFF, 1);
+        assert_eq!(EVT_NOTE_CHOKE, 2);
+        assert_eq!(EVT_PARAM_VALUE, 5);
+    }
+
+    #[test]
+    fn cbor_map_header_forms() {
+        let mut buf = alloc::vec::Vec::new();
+        push_cbor_map_header(&mut buf, 5);
+        assert_eq!(buf, [0xa5]);
+
+        buf.clear();
+        push_cbor_map_header(&mut buf, 23);
+        assert_eq!(buf, [0xa0 | 23]);
+
+        buf.clear();
+        push_cbor_map_header(&mut buf, 74);
+        assert_eq!(buf, [0xb8, 74]);
+
+        buf.clear();
+        push_cbor_map_header(&mut buf, 255);
+        assert_eq!(buf, [0xb8, 255]);
+
+        buf.clear();
+        push_cbor_map_header(&mut buf, 770); // Pulze's param surface
+        assert_eq!(buf, [0xb9, 0x03, 0x02]);
+
+        buf.clear();
+        push_cbor_map_header(&mut buf, 65535);
+        assert_eq!(buf, [0xb9, 0xff, 0xff]);
     }
 }
