@@ -33,11 +33,23 @@ pub struct NksMeta {
     pub uuid: String,
 }
 
+/// One NICA controller assignment — a knob on a parameter page (8 per page).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RemoteControl {
+    pub id: String,
+    pub name: String,
+    pub section: String,
+    pub autoname: bool,
+    pub vflag: bool,
+}
+
 /// A fully-parsed `.nksf`/`.nksfx`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Parsed {
     pub meta: NksMeta,
     pub plugin_id: Plid,
+    /// NICA `ni8` parameter pages — each page holds up to 8 controls.
+    pub remote_controls: Vec<Vec<RemoteControl>>,
     pub pchk: Vec<u8>,
 }
 
@@ -69,15 +81,19 @@ pub fn parse(bytes: &[u8]) -> Result<Parsed, String> {
         Some(body) => decode_plid(body)?,
         None => Plid::default(),
     };
+    let remote_controls = match find(&chunks, b"NICA") {
+        Some(body) => decode_nica(body)?,
+        None => Vec::new(),
+    };
     let pchk = find(&chunks, b"PCHK").map(|b| b.to_vec()).unwrap_or_default();
 
-    Ok(Parsed { meta, plugin_id, pchk })
+    Ok(Parsed { meta, plugin_id, remote_controls, pchk })
 }
 
 /// Encode a structured value into NKSF container bytes.
 pub fn encode(value: &Parsed) -> Result<Vec<u8>, String> {
     let nisi = versioned(encode_nisi(&value.meta));
-    let nica = versioned(msgpack::encode(&msgpack::Value::Map(vec![]))); // reserved
+    let nica = versioned(encode_nica(&value.remote_controls));
     let plid = versioned(encode_plid(&value.plugin_id));
 
     let mut inner = Vec::new();
@@ -207,8 +223,12 @@ fn encode_plid(p: &Plid) -> Vec<u8> {
     if let Some(id) = &p.clap_id {
         pairs.push(("CLAP.id".into(), Str(id.clone())));
     }
-    // NOTE: VST3.uid / VST.magic serialization needs MessagePack integers, which
-    // the container's minimal codec does not emit yet — tracked as follow-up.
+    if let Some(uid) = &p.vst3_uid {
+        pairs.push(("VST3.uid".into(), Arr(uid.iter().map(|&w| Int(w as i64)).collect())));
+    }
+    if let Some(magic) = p.vst_magic {
+        pairs.push(("VST.magic".into(), Int(magic as i64)));
+    }
     msgpack::encode(&Map(pairs))
 }
 
@@ -216,11 +236,80 @@ fn decode_plid(body: &[u8]) -> Result<Plid, String> {
     let pairs = as_map(msgpack::decode(strip_version(body)?)?)?;
     let mut p = Plid::default();
     for (k, v) in pairs {
-        if k == "CLAP.id" {
-            p.clap_id = Some(as_str(v)?);
+        match k.as_str() {
+            "CLAP.id" => p.clap_id = Some(as_str(v)?),
+            "VST.magic" => p.vst_magic = Some(as_i32(v)?),
+            "VST3.uid" => {
+                let words = as_arr(v)?
+                    .into_iter()
+                    .map(as_i32)
+                    .collect::<Result<Vec<_>, _>>()?;
+                p.vst3_uid = Some(
+                    <[i32; 4]>::try_from(words.as_slice())
+                        .map_err(|_| "VST3.uid must have exactly 4 words".to_string())?,
+                );
+            }
+            _ => {}
         }
     }
     Ok(p)
+}
+
+fn encode_nica(pages: &[Vec<RemoteControl>]) -> Vec<u8> {
+    use msgpack::Value::*;
+    if pages.is_empty() {
+        return msgpack::encode(&Map(vec![])); // no controller assignments
+    }
+    let ni8 = Arr(pages
+        .iter()
+        .map(|page| {
+            Arr(page
+                .iter()
+                .map(|c| {
+                    Map(vec![
+                        ("id".into(), Str(c.id.clone())),
+                        ("name".into(), Str(c.name.clone())),
+                        ("section".into(), Str(c.section.clone())),
+                        ("autoname".into(), Bool(c.autoname)),
+                        ("vflag".into(), Bool(c.vflag)),
+                    ])
+                })
+                .collect())
+        })
+        .collect());
+    msgpack::encode(&Map(vec![("ni8".into(), ni8)]))
+}
+
+fn decode_nica(body: &[u8]) -> Result<Vec<Vec<RemoteControl>>, String> {
+    let pairs = as_map(msgpack::decode(strip_version(body)?)?)?;
+    let ni8 = match pairs.into_iter().find(|(k, _)| k == "ni8") {
+        Some((_, v)) => v,
+        None => return Ok(Vec::new()),
+    };
+    as_arr(ni8)?
+        .into_iter()
+        .map(|page| {
+            as_arr(page)?
+                .into_iter()
+                .map(decode_control)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .collect()
+}
+
+fn decode_control(v: msgpack::Value) -> Result<RemoteControl, String> {
+    let mut c = RemoteControl::default();
+    for (k, val) in as_map(v)? {
+        match k.as_str() {
+            "id" => c.id = as_str(val)?,
+            "name" => c.name = as_str(val)?,
+            "section" => c.section = as_str(val)?,
+            "autoname" => c.autoname = as_bool(val)?,
+            "vflag" => c.vflag = as_bool(val)?,
+            _ => {}
+        }
+    }
+    Ok(c)
 }
 
 fn as_map(v: msgpack::Value) -> Result<Vec<(String, msgpack::Value)>, String> {
@@ -245,6 +334,18 @@ fn as_str(v: msgpack::Value) -> Result<String, String> {
 fn as_str_list(v: msgpack::Value) -> Result<Vec<String>, String> {
     as_arr(v)?.into_iter().map(as_str).collect()
 }
+fn as_bool(v: msgpack::Value) -> Result<bool, String> {
+    match v {
+        msgpack::Value::Bool(b) => Ok(b),
+        other => Err(format!("expected a bool, got {}", other.kind())),
+    }
+}
+fn as_i32(v: msgpack::Value) -> Result<i32, String> {
+    match v {
+        msgpack::Value::Int(n) => i32::try_from(n).map_err(|_| format!("integer {n} out of i32 range")),
+        other => Err(format!("expected an integer, got {}", other.kind())),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Minimal MessagePack — the subset NISI/PLID use (nil, str, array, map).
@@ -254,6 +355,8 @@ pub mod msgpack {
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum Value {
         Nil,
+        Bool(bool),
+        Int(i64),
         Str(String),
         Arr(Vec<Value>),
         Map(Vec<(String, Value)>),
@@ -263,6 +366,8 @@ pub mod msgpack {
         pub fn kind(&self) -> &'static str {
             match self {
                 Value::Nil => "nil",
+                Value::Bool(_) => "bool",
+                Value::Int(_) => "integer",
                 Value::Str(_) => "string",
                 Value::Arr(_) => "array",
                 Value::Map(_) => "map",
@@ -279,6 +384,8 @@ pub mod msgpack {
     fn enc(v: &Value, out: &mut Vec<u8>) {
         match v {
             Value::Nil => out.push(0xc0),
+            Value::Bool(b) => out.push(if *b { 0xc3 } else { 0xc2 }),
+            Value::Int(n) => enc_int(*n, out),
             Value::Str(s) => {
                 let b = s.as_bytes();
                 let n = b.len();
@@ -318,6 +425,26 @@ pub mod msgpack {
         }
     }
 
+    fn enc_int(n: i64, out: &mut Vec<u8>) {
+        if (0..=127).contains(&n) {
+            out.push(n as u8); // positive fixint
+        } else if (-32..0).contains(&n) {
+            out.push(n as i8 as u8); // negative fixint (0xe0..=0xff)
+        } else if let Ok(v) = i8::try_from(n) {
+            out.push(0xd0);
+            out.push(v as u8);
+        } else if let Ok(v) = i16::try_from(n) {
+            out.push(0xd1);
+            out.extend_from_slice(&v.to_be_bytes());
+        } else if let Ok(v) = i32::try_from(n) {
+            out.push(0xd2);
+            out.extend_from_slice(&v.to_be_bytes());
+        } else {
+            out.push(0xd3);
+            out.extend_from_slice(&n.to_be_bytes());
+        }
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Value, String> {
         let mut r = Reader { b: bytes, pos: 0 };
         let v = r.value()?;
@@ -346,6 +473,12 @@ pub mod msgpack {
             let s = self.take(2)?;
             Ok(u16::from_be_bytes([s[0], s[1]]) as usize)
         }
+        fn be<const N: usize>(&mut self) -> Result<[u8; N], String> {
+            let s = self.take(N)?;
+            let mut a = [0u8; N];
+            a.copy_from_slice(s);
+            Ok(a)
+        }
         fn string(&mut self, n: usize) -> Result<Value, String> {
             let s = self.take(n)?;
             Ok(Value::Str(String::from_utf8_lossy(s).into_owned()))
@@ -372,6 +505,18 @@ pub mod msgpack {
             let tag = self.u8()?;
             match tag {
                 0xc0 => Ok(Value::Nil),
+                0xc2 => Ok(Value::Bool(false)),
+                0xc3 => Ok(Value::Bool(true)),
+                0x00..=0x7f => Ok(Value::Int(tag as i64)),
+                0xe0..=0xff => Ok(Value::Int(tag as i8 as i64)),
+                0xcc => Ok(Value::Int(self.u8()? as i64)),
+                0xcd => Ok(Value::Int(u16::from_be_bytes(self.be::<2>()?) as i64)),
+                0xce => Ok(Value::Int(u32::from_be_bytes(self.be::<4>()?) as i64)),
+                0xcf => Ok(Value::Int(u64::from_be_bytes(self.be::<8>()?) as i64)),
+                0xd0 => Ok(Value::Int(self.u8()? as i8 as i64)),
+                0xd1 => Ok(Value::Int(i16::from_be_bytes(self.be::<2>()?) as i64)),
+                0xd2 => Ok(Value::Int(i32::from_be_bytes(self.be::<4>()?) as i64)),
+                0xd3 => Ok(Value::Int(i64::from_be_bytes(self.be::<8>()?))),
                 0xa0..=0xbf => {
                     let n = (tag & 0x1f) as usize;
                     self.string(n)
@@ -417,7 +562,9 @@ pub mod msgpack {
 mod component {
     wit_bindgen::generate!({ world: "nksf", path: "wit" });
 
-    use exports::plinken::nksf::codec::{Guest, NksMeta as WMeta, Parsed as WParsed, Plid as WPlid};
+    use exports::plinken::nksf::codec::{
+        Guest, NksMeta as WMeta, Parsed as WParsed, Plid as WPlid, RemoteControl as WRc,
+    };
 
     struct Component;
 
@@ -448,6 +595,21 @@ mod component {
                 vst3_uid: p.plugin_id.vst3_uid.map(|u| u.to_vec()),
                 vst_magic: p.plugin_id.vst_magic,
             },
+            nica: p
+                .remote_controls
+                .into_iter()
+                .map(|page| {
+                    page.into_iter()
+                        .map(|c| WRc {
+                            id: c.id,
+                            name: c.name,
+                            section: c.section,
+                            autoname: c.autoname,
+                            vflag: c.vflag,
+                        })
+                        .collect()
+                })
+                .collect(),
             pchk: p.pchk,
         }
     }
@@ -473,6 +635,21 @@ mod component {
                     .and_then(|v| <[i32; 4]>::try_from(v).ok()),
                 vst_magic: w.plugin_id.vst_magic,
             },
+            remote_controls: w
+                .nica
+                .into_iter()
+                .map(|page| {
+                    page.into_iter()
+                        .map(|c| super::RemoteControl {
+                            id: c.id,
+                            name: c.name,
+                            section: c.section,
+                            autoname: c.autoname,
+                            vflag: c.vflag,
+                        })
+                        .collect()
+                })
+                .collect(),
             pchk: w.pchk,
         }
     }
@@ -500,7 +677,16 @@ mod tests {
                 modes: vec!["Mono".into()],
                 uuid: "abc-123".into(),
             },
-            plugin_id: Plid { clap_id: Some("com.plinken.synome".into()), ..Default::default() },
+            plugin_id: Plid {
+                clap_id: Some("com.plinken.synome".into()),
+                vst3_uid: Some([1398362959, -12345, 0, 777]),
+                vst_magic: Some(-559038737), // 0xDEADBEEF as i32
+            },
+            remote_controls: vec![vec![
+                RemoteControl { id: "1".into(), name: "Cutoff".into(), section: "Filter".into(), autoname: false, vflag: true },
+                RemoteControl { id: "2".into(), name: "Reso".into(), section: "Filter".into(), autoname: false, vflag: true },
+                RemoteControl { id: String::new(), name: String::new(), section: String::new(), autoname: true, vflag: false },
+            ]],
             pchk: vec![0x50, 0x4c, 0x53, 0x54, 1, 2, 3, 4, 5], // "PLST" + junk
         }
     }
@@ -554,6 +740,46 @@ mod tests {
         let mut bytes = encode(&sample()).unwrap();
         bytes.truncate(20); // cut mid-chunk
         assert!(parse(&bytes).is_err());
+    }
+
+    #[test]
+    fn plid_vst_ids_round_trip() {
+        let back = parse(&encode(&sample()).unwrap()).unwrap();
+        assert_eq!(back.plugin_id.vst_magic, Some(-559038737));
+        assert_eq!(back.plugin_id.vst3_uid, Some([1398362959, -12345, 0, 777]));
+    }
+
+    #[test]
+    fn nica_pages_round_trip() {
+        let back = parse(&encode(&sample()).unwrap()).unwrap();
+        assert_eq!(back.remote_controls, sample().remote_controls);
+        // bool fields survive
+        assert!(back.remote_controls[0][0].vflag);
+        assert!(back.remote_controls[0][2].autoname);
+    }
+
+    #[test]
+    fn empty_nica_round_trips_to_empty() {
+        let mut p = sample();
+        p.remote_controls = vec![];
+        let back = parse(&encode(&p).unwrap()).unwrap();
+        assert!(back.remote_controls.is_empty());
+    }
+
+    #[test]
+    fn msgpack_int_edge_values() {
+        use msgpack::{decode, encode, Value};
+        for n in [0i64, 1, 127, 128, -1, -32, -33, -128, -129, 32767, -32768, 2_000_000, -2_000_000, i32::MAX as i64, i32::MIN as i64] {
+            let bytes = encode(&Value::Int(n));
+            assert_eq!(decode(&bytes).unwrap(), Value::Int(n), "int {n}");
+        }
+    }
+
+    #[test]
+    fn msgpack_bool_round_trips() {
+        use msgpack::{decode, encode, Value};
+        assert_eq!(decode(&encode(&Value::Bool(true))).unwrap(), Value::Bool(true));
+        assert_eq!(decode(&encode(&Value::Bool(false))).unwrap(), Value::Bool(false));
     }
 
     #[test]

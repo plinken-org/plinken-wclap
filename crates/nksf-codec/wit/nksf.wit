@@ -30,11 +30,22 @@ interface codec {
     uuid: string,
   }
 
+  // One NICA controller assignment — a knob on a parameter page (8 per page).
+  record remote-control {
+    id: string,
+    name: string,
+    section: string,
+    autoname: bool,
+    vflag: bool,
+  }
+
   // A fully-parsed .nksf/.nksfx. `pchk` is the opaque plugin state (for a WCLAP
   // plugin this is the clap.state PLST blob); the codec never interprets it.
+  // `nica` is the NKS `ni8` parameter pages (each page holds up to 8 controls).
   record parsed {
     meta: nks-meta,
     plugin-id: plid,
+    nica: list<list<remote-control>>,
     pchk: list<u8>,
   }
 

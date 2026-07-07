@@ -27,6 +27,10 @@ Spec: `../../spec/wclap-preset.md`. Online library: `Plinken/docs/sound-library-
 
 ## Status
 
-RIFF container + the NISI/PLID MessagePack subset are implemented and tested.
-Follow-ups: MessagePack integers for `VST3.uid`/`VST.magic`, and `NICA`
-controller-page (remote-controls) encode/decode.
+Implemented and tested (12 tests): RIFF container; `NISI` summary; `PLID`
+including `CLAP.id`, `VST.magic`, `VST3.uid`; `NICA` `ni8` controller pages
+(remote-controls); `PCHK` verbatim. MessagePack covers the container's full
+subset — nil, bool, integers (fixint / int8-64 / uint8-64), string, array, map.
+
+Follow-ups: real-file interop fixtures from shipping NKS libraries, and any
+NISI fields that use floats (none in our schema today).
