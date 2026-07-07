@@ -1,0 +1,13 @@
+[package]
+name = "plinken-dsp"
+version = "0.1.0"
+edition = "2021"
+description = "Shared hand-rolled DSP primitives for Plinken in-house plugins and engines"
+license = "MIT OR Apache-2.0"
+
+# Rules of this crate (see plugins/ARCHITECTURE.md, Decision 3):
+# - zero dependencies; compiles for wasm32-unknown-unknown and native
+#   from the same source — no platform deps, no I/O
+# - f32 block processing; allocation only in new()/set_sample_rate(),
+#   never in process paths
+[dependencies]

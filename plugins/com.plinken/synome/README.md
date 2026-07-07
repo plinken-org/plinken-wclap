@@ -1,51 +1,40 @@
 # Synome
 
-Polyphonic synthesizer plugin for the Plinken WCLAP host.
+Moog-style polyphonic synthesizer plugin for the Plinken WCLAP host.
 
-**Status: Phase A scaffold — silent.** This crate builds a WCLAP plugin that
-loads cleanly, declares its audio + note ports, and renders silence. The DSP
-will be ported in subsequent phases.
+**Status: DSP ported — makes sound.** Notes arrive through the CLAP note
+port (wclap-plugin event-queue hooks), params through `clap.params` /
+webview, knob state persists via `clap.state`. No UI yet (`has_ui: false`);
+next phases add the sample oscillator mode and a `widgets/` UI.
 
-## Architecture goal
+## What's inside
 
-Anti-aliased polyphonic synth with:
+- 2 oscillators with saw/pulse morphing, FM between them, hard sync
+- Moog ladder filter (2/4 pole, LP/BP/HP) with env/LFO/keytrack modulation
+- 3 ADSR envelopes (amp, filter, mod)
+- LFO (5 shapes, onset delay, retrig), vibrato
+- White/pink noise mixer channel
+- Effects: chorus/phaser/flanger, delay, comb+allpass reverb
+- 16-voice pool (4/8/12/16 selectable) with retrigger → idle →
+  oldest-releasing stealing; mono/legato modes; glide
+- Master drive + soft clip
 
-- BLEP-corrected analog-style oscillators (saw / square / pulse / triangle)
-- ADSR envelope per voice
-- State-variable filter
-- Voice-pool with steal-oldest fallback
+The DSP primitives live in the shared [`plinken-dsp`](../../../crates/plinken-dsp)
+crate (vendored from the private monorepo — the copy here is canonical).
+`src/synth.rs` is a near-verbatim port of the monorepo Synome engine;
+`src/params.rs` freezes param ids 0–73 (they match the `synome.json` UI and
+saved state blobs — only append).
 
-## Where the DSP comes from
+Arpeggiator params (61–66) are declared but inert, same as the source
+engine. The NNUE match-sound feature is not ported yet.
 
-> **TODO (DSP port — not yet copied into this repo).** The existing Rust
-> implementation lives in a private repo:
->
->     /Volumes/Music/TECH41/gitroot/plinken-synome/plugin/src/lib/rust/synth/
->
-> Files of interest:
->
-> - `synth.rs`        — top-level synth
-> - `voice_pool.rs`   — polyphony + voice stealing
-> - `voice.rs`        — per-voice render
-> - `adsr.rs`         — envelopes
-> - `filter.rs`       — state-variable filter
-> - `table.rs`        — BLEP oscillator + wavetable system
-> - `midi.rs`         — note / CC event handling
-> - `peak_limiter.rs` — output limiter
-> - `upsampler.rs`    — oversampling for high-quality BLEP
->
-> Porting steps: strip `web-sys` / `wasm-bindgen` (they were used for the
-> previous WAM wrapper), make the crate `no_std + alloc`, expose a single
-> `pub fn process(...)` that the WCLAP `plugin.process` calls. The wrapper in
-> `src/lib.rs` is where each of those pieces gets plugged in.
-
-## Build
+## Build & test
 
 ```sh
-pnpm --filter @plinken/synome build
+cargo test -p com-plinken-synome         # includes an audibility test
+pnpm --filter @plinken/synome build      # → dist/synome.wclap.tar.gz
 ```
 
-Produces `dist/synome.wclap.tar.gz`.
-
 To test in the wclap-host page, paste the bundle URL into the URL bar above
-the shelf (or drop the file from disk).
+the shelf (or drop the file from disk) and play notes via MIDI / the host
+keyboard.

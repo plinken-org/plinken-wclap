@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/plinken-dsp",
     "crates/wclap-host",
     "crates/wclap-plugin",
     "plugins/com.plinken/brick-limiter",

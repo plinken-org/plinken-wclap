@@ -105,8 +105,9 @@ dependencies = [
 
 [[package]]
 name = "com-plinken-synome"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
+ "plinken-dsp",
  "wclap-plugin",
 ]
 
@@ -315,6 +316,10 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "plinken-dsp"
+version = "0.1.0"
 
 [[package]]
 name = "proc-macro2"
