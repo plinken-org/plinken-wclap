@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "generatedAt": "2026-07-07T06:59:37.237Z",
+  "generatedAt": "2026-07-07T20:12:37.300Z",
   "items": [
     {
       "id": "com.plinken.auto-pan",
@@ -289,6 +289,43 @@
       ]
     },
     {
+      "id": "com.plinken.pulze",
+      "label": "Plinken: Pulze",
+      "url": "/wclap/com.plinken.pulze.wclap.tar.gz",
+      "vendor": "Plinken",
+      "license": "MIT",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/pulze",
+      "version": "0.1.3",
+      "description": "MPC-style drum machine — dynamic 4×4 pad banks, classic Akai note layout, sample pads with tune/AD/filter and mute groups.",
+      "features": [
+        "instrument",
+        "drum-machine"
+      ],
+      "homepage": "https://plinken.org",
+      "has_ui": true,
+      "ui": {
+        "compact_size": {
+          "width": 260,
+          "height": 56
+        },
+        "expanded_size": {
+          "width": 560,
+          "height": 640
+        }
+      },
+      "plugins": [
+        {
+          "id": "com.plinken.pulze",
+          "name": "Pulze",
+          "features": [
+            "instrument",
+            "drum-machine"
+          ],
+          "has_ui": true
+        }
+      ]
+    },
+    {
       "id": "com.plinken.reverb",
       "label": "Plinken: Reverb",
       "url": "/wclap/com.plinken.reverb.wclap.tar.gz",
@@ -410,14 +447,20 @@
       "vendor": "Plinken",
       "license": "MIT",
       "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/synome",
-      "version": "0.0.1",
-      "description": "Polyphonic synthesizer with anti-aliased BLEP oscillators. (Phase A scaffold — silent.)",
+      "version": "0.1.3",
+      "description": "Moog-style polysynth — 2 oscillators (FM, hard sync), ladder filter, 3 ADSRs, LFO, chorus/phaser/flanger, delay, reverb.",
       "features": [
         "instrument",
         "synthesizer"
       ],
       "homepage": "https://plinken.org",
       "has_ui": true,
+      "ui": {
+        "expanded_size": {
+          "width": 1080,
+          "height": 700
+        }
+      },
       "plugins": [
         {
           "id": "com.plinken.synome",
@@ -425,33 +468,6 @@
           "features": [
             "instrument",
             "synthesizer"
-          ],
-          "has_ui": true
-        }
-      ]
-    },
-    {
-      "id": "com.plinken.pulze",
-      "label": "Plinken: Pulze",
-      "url": "/samples/com.plinken.pulze.wclap.tar.gz",
-      "vendor": "Plinken",
-      "license": "MIT",
-      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/pulze",
-      "version": "0.1.3",
-      "description": "MPC-style drum machine — dynamic 4×4 pad banks, classic Akai note layout, sample pads with tune/AD/filter and mute groups.",
-      "features": [
-        "instrument",
-        "drum-machine"
-      ],
-      "homepage": "https://plinken.org",
-      "has_ui": true,
-      "plugins": [
-        {
-          "id": "com.plinken.pulze",
-          "name": "Pulze",
-          "features": [
-            "instrument",
-            "drum-machine"
           ],
           "has_ui": true
         }
