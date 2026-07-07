@@ -3,7 +3,7 @@
   "id": "com.plinken.pulze",
   "name": "Pulze",
   "vendor": "Plinken",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "MPC-style drum machine — dynamic 4×4 pad banks, classic Akai note layout, sample pads with tune/AD/filter and mute groups.",
   "features": ["instrument", "drum-machine"],
   "license": "MIT",

@@ -22,7 +22,7 @@ static PLUGIN_DEF: PluginDef = PluginDef {
     name: b"Synome\0",
     vendor: b"Plinken\0",
     url: b"https://plinken.org\0",
-    version: b"0.1.2\0",
+    version: b"0.1.3\0",
     description: b"Moog-style polysynth \xe2\x80\x94 2 osc (FM, hard sync), ladder filter, 3 ADSRs, LFO, FX.\0",
     features: &[b"instrument\0", b"synthesizer\0"],
     audio_inputs: 0,

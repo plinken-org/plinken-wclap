@@ -144,10 +144,13 @@ impl SampleVoice {
         self.pitch_ratio = base_pitch * tune_ratio;
         self.sample = Some(sample);
         self.gain = params.gain;
-        // Equal-power pan.
+        // Balance pan (unity at centre): a centred pad plays its sample at
+        // FULL level — panning only attenuates the opposite side. Drum
+        // machines want the pad hot; equal-power's −3 dB centre dip reads
+        // as "quiet". The user reduces level, we never pre-attenuate.
         let pan = params.pan.clamp(-1.0, 1.0);
-        self.pan_l = ((1.0 - pan) * 0.5).sqrt();
-        self.pan_r = ((1.0 + pan) * 0.5).sqrt();
+        self.pan_l = if pan <= 0.0 { 1.0 } else { 1.0 - pan };
+        self.pan_r = if pan >= 0.0 { 1.0 } else { 1.0 + pan };
         self.loop_mode = params.loop_mode;
         self.loop_start = params.loop_start;
         self.loop_end = params.loop_end;
