@@ -3,7 +3,7 @@
   "id": "com.plinken.brick-limiter",
   "name": "Brick Limiter",
   "vendor": "Plinken",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Lookahead brickwall peak limiter (2 ms lookahead \u2014 adds latency; use on buses/master, not for tracking).",
   "features": [
     "audio-effect",

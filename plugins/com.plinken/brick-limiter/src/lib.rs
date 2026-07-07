@@ -36,7 +36,7 @@ static PLUGIN_DEF: PluginDef = PluginDef {
     name: b"Brick Limiter\0",
     vendor: b"Plinken\0",
     url: b"https://plinken.org\0",
-    version: b"0.0.3\0",
+    version: b"0.0.4\0",
     description: b"Lookahead brickwall peak limiter for buses and master (2 ms lookahead latency).\0",
     features: &[b"audio-effect\0", b"limiter\0", b"mastering\0"],
     audio_inputs: 1,
@@ -385,6 +385,13 @@ impl Plugin for BrickLimiter {
         };
         p.recalc_gains();
         p
+    }
+
+    /// The lookahead delay is real latency the host must compensate.
+    /// EXACTLY the buffer length `Lookahead::new` allocates, so the
+    /// reported value and the actual delay can't drift apart.
+    fn latency_samples(&self) -> u32 {
+        ((LOOKAHEAD_MS * 0.001 * self.sample_rate).max(1.0)) as u32
     }
 
     fn activate(&mut self, sample_rate: f64, _max_frames: u32) {

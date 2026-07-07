@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "generatedAt": "2026-07-07T04:13:55.245Z",
+  "generatedAt": "2026-07-07T06:59:37.237Z",
   "items": [
     {
       "id": "com.plinken.auto-pan",
@@ -46,7 +46,7 @@
       "vendor": "Plinken",
       "license": "MIT",
       "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/brick-limiter",
-      "version": "0.0.3",
+      "version": "0.0.4",
       "description": "Lookahead brickwall peak limiter (2 ms lookahead — adds latency; use on buses/master, not for tracking).",
       "features": [
         "audio-effect",
