@@ -70,15 +70,33 @@ importers:
         specifier: ^0.28.9
         version: 0.28.17
 
+  plugins/com.plinken/brick-limiter: {}
+
+  plugins/com.plinken/chorus: {}
+
+  plugins/com.plinken/compressor: {}
+
+  plugins/com.plinken/delay: {}
+
+  plugins/com.plinken/eq: {}
+
   plugins/com.plinken/organ: {}
 
   plugins/com.plinken/piano: {}
+
+  plugins/com.plinken/pulze: {}
+
+  plugins/com.plinken/reverb: {}
+
+  plugins/com.plinken/saturator: {}
 
   plugins/com.plinken/spectrum: {}
 
   plugins/com.plinken/synome: {}
 
   plugins/com.plinken/vocal-limiter: {}
+
+  widget-lib: {}
 
 packages:
 
