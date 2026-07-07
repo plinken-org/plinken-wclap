@@ -322,6 +322,13 @@ name = "plinken-dsp"
 version = "0.1.0"
 
 [[package]]
+name = "plinken-sample-core"
+version = "0.1.0"
+dependencies = [
+ "plinken-dsp",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"

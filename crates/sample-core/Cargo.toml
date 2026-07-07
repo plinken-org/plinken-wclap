@@ -1,0 +1,12 @@
+[package]
+name = "plinken-sample-core"
+version = "0.1.0"
+edition = "2021"
+description = "Shared sample-playback core for Plinken plugins: planar PCM buffers, pitched voices, chunked sample-transfer assembly"
+license = "MIT OR Apache-2.0"
+
+# Same rules as plinken-dsp: compiles for wasm32-unknown-unknown and native
+# from one source; no platform deps, no I/O; allocation outside process
+# paths only (SampleAssembler allocates on chunk 0, never in render).
+[dependencies]
+plinken-dsp = { path = "../plinken-dsp" }
