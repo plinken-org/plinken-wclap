@@ -1,0 +1,21 @@
+[package]
+name = "nksf-codec"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "NKSF (Native Kontrol Standard) preset-container codec — pure Rust, exposed as a WIT component."
+
+# rlib: native use (runner via wasmtime, `cargo test`). cdylib: the wasm
+# component build (`cargo component build` with the `component` feature).
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+# The Component Model glue. Off by default so the pure codec + its tests build
+# with a plain `cargo test` (no component toolchain required). Turn on for the
+# `cargo component build --features component` wasm build.
+component = ["dep:wit-bindgen"]
+
+[dependencies]
+wit-bindgen = { version = "0.36", optional = true }

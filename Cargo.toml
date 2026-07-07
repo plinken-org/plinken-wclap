@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/nksf-codec",
     "crates/plinken-dsp",
     "crates/sample-core",
     "crates/wclap-host",

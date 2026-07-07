@@ -1,0 +1,50 @@
+// PUBLIC. The NKSF (Native Kontrol Standard) preset-container codec, expressed
+// as a WebAssembly Component Model world. One implementation (Rust) serves the
+// browser (via jco transpile) and the native runner (wasmtime), and the TS +
+// Rust types are generated from these records so they stay in lockstep.
+//
+// This world is the pure codec ONLY — RIFF/MessagePack container in, structured
+// metadata + opaque plugin state out. It knows nothing about the market API,
+// audio, or the CLAP host ABI (which stays C-ABI core wasm, not the Component
+// Model).
+package plinken:nksf@0.1.0;
+
+interface codec {
+  // NKS PLID — how the host resolves which plugin a preset needs.
+  record plid {
+    clap-id: option<string>,      // our reverse-DNS id, e.g. "com.plinken.synome"
+    vst3-uid: option<list<s32>>,  // four s32 words
+    vst-magic: option<s32>,
+  }
+
+  // NKS NISI summary — the queryable facets.
+  record nks-meta {
+    name: string,
+    author: string,
+    vendor: string,
+    comment: string,
+    device-type: string,          // "INST" | "FX" | "MIDI"
+    bankchain: list<string>,      // <= 3 levels
+    types: list<list<string>>,    // nested category paths
+    modes: list<string>,
+    uuid: string,
+  }
+
+  // A fully-parsed .nksf/.nksfx. `pchk` is the opaque plugin state (for a WCLAP
+  // plugin this is the clap.state PLST blob); the codec never interprets it.
+  record parsed {
+    meta: nks-meta,
+    plugin-id: plid,
+    pchk: list<u8>,
+  }
+
+  // Parse NKSF container bytes -> structured value (Err = human-readable reason).
+  parse: func(bytes: list<u8>) -> result<parsed, string>;
+
+  // Encode a structured value -> NKSF container bytes.
+  encode: func(value: parsed) -> result<list<u8>, string>;
+}
+
+world nksf {
+  export codec;
+}
