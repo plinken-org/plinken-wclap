@@ -13,7 +13,7 @@
   "format": "tar.gz",
   "has_ui": true,
   "ui": {
-    "expanded_size": { "width": 940, "height": 470 }
+    "expanded_size": { "width": 1080, "height": 700 }
   },
   "plugins": [
     {
