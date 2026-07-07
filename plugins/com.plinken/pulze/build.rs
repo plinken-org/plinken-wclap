@@ -82,7 +82,9 @@ fn main() {
         stepped: bool,
     }
     let pad_params = [
-        P { name: "Level", min: 0.0, max: 1.0, default: 0.8, stepped: false },
+        // Unity by default — a dropped kick plays at 0 dB; the USER turns
+        // it down, the plugin never pre-attenuates.
+        P { name: "Level", min: 0.0, max: 1.0, default: 1.0, stepped: false },
         P { name: "Tune", min: -36.0, max: 36.0, default: 0.0, stepped: false },
         P { name: "Fine Tune", min: -100.0, max: 100.0, default: 0.0, stepped: false },
         P { name: "Pan", min: -1.0, max: 1.0, default: 0.0, stepped: false },
@@ -110,7 +112,7 @@ fn main() {
         "wclap_plugin::PARAM_IS_STEPPED | wclap_plugin::PARAM_IS_HIDDEN";
     writeln!(
         out,
-        "    wclap_plugin::ParamDef {{ id: 0, flags: {auto}, name: b\"Master Level\\0\", module: b\"\\0\", min: 0f64, max: 1f64, default: 0.8f64 }},"
+        "    wclap_plugin::ParamDef {{ id: 0, flags: {auto}, name: b\"Master Level\\0\", module: b\"\\0\", min: 0f64, max: 1f64, default: 1f64 }},"
     )
     .unwrap();
     // PadCount is host/UI plumbing, not a knob: hidden + stepped, persists

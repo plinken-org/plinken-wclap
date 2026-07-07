@@ -28,7 +28,7 @@ static PLUGIN_DEF: PluginDef = PluginDef {
     name: b"Pulze\0",
     vendor: b"Plinken\0",
     url: b"https://plinken.org\0",
-    version: b"0.1.1\0",
+    version: b"0.1.2\0",
     description: b"MPC-style drum machine \xe2\x80\x94 dynamic pads, Akai note layout, sample playback.\0",
     features: &[b"instrument\0", b"drum-machine\0"],
     audio_inputs: 0,

@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "com-plinken-pulze"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "plinken-dsp",
  "plinken-sample-core",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "com-plinken-synome"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "plinken-dsp",
  "plinken-sample-core",

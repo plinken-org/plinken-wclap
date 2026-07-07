@@ -41,7 +41,7 @@
   const transport = new Transport();
 
   const master = new Pot(document.getElementById('master'),
-    { id: PID_MASTER, min: 0, max: 1, default: 0.8, label: 'Master',
+    { id: PID_MASTER, min: 0, max: 1, default: 1, label: 'Master',
       format: (v) => `${Math.round(v * 100)}%` });
   master.onChange((v, id) => transport.sendSet(id, v));
 

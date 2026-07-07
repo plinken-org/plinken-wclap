@@ -9,9 +9,11 @@ use crate::sample::SampleData;
 use plinken_dsp::Envelope;
 use std::sync::Arc;
 
-/// Voice scaling factor to prevent clipping with many voices.
-/// 1/4 = -12 dB headroom.
-pub const VOICE_SCALE: f32 = 0.25;
+// NOTE: no built-in per-voice attenuation. Earlier revisions baked a
+// fixed 1/4 (-12 dB) "headroom" scale into render(), which made single
+// drum hits far too quiet once velocity × level × master stacked on top.
+// Headroom policy belongs to the CALLER (Pulze soft-clips its master sum;
+// Synome shapes through its own amp path).
 
 /// Forced-release time used by [`SampleVoice::choke`], in seconds. Long
 /// enough to avoid a click, short enough to read as an immediate cut.
@@ -281,7 +283,7 @@ impl SampleVoice {
             self.state = VoiceState::Idle;
         }
 
-        let gain = self.velocity_amp * self.gain * env * VOICE_SCALE;
+        let gain = self.velocity_amp * self.gain * env;
         (left * gain * self.pan_l, right * gain * self.pan_r)
     }
 
@@ -509,15 +511,26 @@ mod tests {
             loop_mode: LoopMode::LoopContinuous,
             ..Default::default()
         };
-        let idx = pool.note_on(one_shot_sample(), 60, 127, &params, 48000.0, 7);
-        // Warm up.
+        // Constant-content sample: any frame-to-frame jump is the
+        // envelope's doing, not the waveform's (a wrapping ramp would
+        // read as a "click" here at unity gain).
+        let flat = Arc::new(SampleData {
+            sample_rate: 48000,
+            channels: 1,
+            frame_count: 4800,
+            left: vec![0.7; 4800],
+            right: vec![],
+        });
+        let idx = pool.note_on(flat, 60, 127, &params, 48000.0, 7);
+        // Warm up, priming `last` with the pre-choke level so the first
+        // measured delta is a real frame-to-frame jump.
+        let mut last = 0.0f32;
         for _ in 0..64 {
-            pool.render(48000.0);
+            (last, _) = pool.render(48000.0);
         }
         pool.choke_tag(7, usize::MAX);
         let _ = idx;
         // ~3 ms at 48k = 144 frames; give it 4x that then require silence.
-        let mut last = 0.0f32;
         let mut max_jump = 0.0f32;
         for _ in 0..600 {
             let (l, _) = pool.render(48000.0);
@@ -525,8 +538,8 @@ mod tests {
             last = l;
         }
         assert_eq!(pool.active_count(), 0, "choked voice goes idle");
-        // No hard-cut click: per-frame jump stays well below full scale.
-        assert!(max_jump < 0.5, "no click on choke, max_jump={max_jump}");
+        // No hard-cut click: per-frame envelope jump stays small.
+        assert!(max_jump < 0.1, "no click on choke, max_jump={max_jump}");
     }
 
     #[test]
