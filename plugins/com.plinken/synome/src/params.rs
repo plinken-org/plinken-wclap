@@ -11,7 +11,7 @@
 use wclap_plugin::{ParamDef, PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED};
 
 /// Total number of parameters.
-pub const PARAM_COUNT: usize = 74;
+pub const PARAM_COUNT: usize = 77;
 
 /// Parameter indices — match synome.json paramId values.
 #[repr(usize)]
@@ -119,6 +119,14 @@ pub enum Param {
     MasterDrive = 71,
     VoiceCount = 72,
     MasterTune = 73,
+
+    // Oscillator modes (74-76, appended — ids stay stable). Mode values
+    // follow plinken_dsp::OscMode: 0 Analog, 1 Wavetable, 2 Granular,
+    // 3 Physical, 4 Sample.
+    Osc1Mode = 74,
+    Osc2Mode = 75,
+    /// MIDI note at which the loaded sample plays 1:1 (Sample mode).
+    SampleRootKey = 76,
 }
 
 macro_rules! p {
@@ -236,6 +244,10 @@ pub static PARAM_DEFS: [ParamDef; PARAM_COUNT] = [
     p!(71, b"master_drive\0", 0.0, 1.0, 0.0),
     p!(72, b"voice_count\0", 0.0, 3.0, 2.0),
     p!(73, b"master_tune\0", -100.0, 100.0, 0.0),
+    // Oscillator modes
+    p!(74, b"osc1_mode\0", 0.0, 4.0, 0.0, stepped),
+    p!(75, b"osc2_mode\0", 0.0, 4.0, 0.0, stepped),
+    p!(76, b"sample_root_key\0", 0.0, 127.0, 60.0, stepped),
 ];
 
 /// Default value for every param slot, as f32 for the DSP array.

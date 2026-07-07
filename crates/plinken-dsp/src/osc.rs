@@ -14,6 +14,11 @@ pub enum OscMode {
     Granular = 2,
     /// Physical: physical modeling / Karplus-Strong (future)
     Physical = 3,
+    /// Sample: pitched sample playback. The Oscillator itself renders
+    /// silence in this mode — the synth substitutes a sample-core voice
+    /// (see Synome's render loop), this variant exists so param values
+    /// map one enum end-to-end.
+    Sample = 4,
 }
 
 impl OscMode {
@@ -23,6 +28,7 @@ impl OscMode {
             1 => Self::Wavetable,
             2 => Self::Granular,
             3 => Self::Physical,
+            4 => Self::Sample,
             _ => Self::Analog,
         }
     }
@@ -68,6 +74,7 @@ impl Oscillator {
             OscMode::Wavetable => self.process_analog(shape, fm), // TODO: wavetable scan
             OscMode::Granular => self.process_analog(shape, fm),  // TODO: granular cloud
             OscMode::Physical => self.process_analog(shape, fm),  // TODO: Karplus-Strong
+            OscMode::Sample => (0.0, false), // rendered by the synth's sample voice
         }
     }
 

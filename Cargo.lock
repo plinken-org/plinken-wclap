@@ -110,6 +110,7 @@ name = "com-plinken-synome"
 version = "0.1.0"
 dependencies = [
  "plinken-dsp",
+ "plinken-sample-core",
  "wclap-plugin",
 ]
 

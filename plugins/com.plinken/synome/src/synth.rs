@@ -22,16 +22,21 @@
 use crate::params::{Param, PARAM_COUNT};
 use plinken_dsp::{
     fast_tanh, midi_to_freq, soft_clip, Delay, Envelope, Lfo, ModulationFx, MoogFilter, Noise,
-    Oscillator, Reverb,
+    OscMode, Oscillator, Reverb,
 };
+use plinken_sample_core::{LoopMode, SampleData, SampleVoice, VoiceParams};
+use std::sync::Arc;
 
 pub const MAX_VOICES: usize = 16;
 
 /// Single synthesizer voice
-#[derive(Clone)]
 pub struct Voice {
     pub osc1: Oscillator,
     pub osc2: Oscillator,
+    /// Per-osc sample readers for OscMode::Sample — position/loop state
+    /// only; env/pan/gain shaping stays with the synth voice.
+    pub sample_osc1: SampleVoice,
+    pub sample_osc2: SampleVoice,
     pub filter: MoogFilter,
     pub amp_env: Envelope,
     pub filter_env: Envelope,
@@ -51,6 +56,8 @@ impl Voice {
         Self {
             osc1: Oscillator::new(sample_rate),
             osc2: Oscillator::new(sample_rate),
+            sample_osc1: SampleVoice::new(),
+            sample_osc2: SampleVoice::new(),
             filter: MoogFilter::new(sample_rate),
             amp_env: Envelope::new(sample_rate),
             filter_env: Envelope::new(sample_rate),
@@ -123,6 +130,9 @@ pub struct Synome {
     global_lfo: Lfo,
     sample_rate: f32,
     params: [f32; PARAM_COUNT],
+    /// Instrument-wide sample for OscMode::Sample (slot 0 of the PLSP
+    /// delivery). Voices read it through per-voice SampleVoice positions.
+    sample_slot: Option<Arc<SampleData>>,
 }
 
 impl Synome {
@@ -138,7 +148,14 @@ impl Synome {
             global_lfo: Lfo::new(sample_rate),
             sample_rate,
             params: crate::params::default_values(),
+            sample_slot: None,
         }
+    }
+
+    /// Install / clear the instrument's sample (OscMode::Sample source).
+    /// Sounding voices keep their current Arc until they end.
+    pub fn set_sample(&mut self, sample: Option<Arc<SampleData>>) {
+        self.sample_slot = sample;
     }
 
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
@@ -169,17 +186,39 @@ impl Synome {
         let max_voices = [4, 8, 12, 16][voice_count_idx.min(3)];
 
         if mono {
+            let legato_hold = legato && self.voices[0].active;
             self.voices[0].note_on(note, vel, legato, glide);
+            if !legato_hold {
+                self.trigger_sample_oscs(0, note);
+            }
             if self.params[Param::LfoRetrig as usize] > 0.5 {
                 self.voices[0].lfo.reset();
             }
         } else {
             let voice_idx = self.find_voice(note, max_voices);
             self.voices[voice_idx].note_on(note, vel, false, glide);
+            self.trigger_sample_oscs(voice_idx, note);
             if self.params[Param::LfoRetrig as usize] > 0.5 {
                 self.voices[voice_idx].lfo.reset();
             }
         }
+    }
+
+    /// (Re)start a voice's sample readers whenever a sample is loaded —
+    /// cheap enough to do unconditionally, so switching an osc to Sample
+    /// mode mid-note just works. Envelope/pan/gain of the reader are
+    /// bypassed (`tick_pitched`); the synth's own env path shapes it.
+    fn trigger_sample_oscs(&mut self, voice_idx: usize, note: u8) {
+        let Some(sample) = self.sample_slot.clone() else { return };
+        let params = VoiceParams {
+            loop_mode: LoopMode::LoopContinuous,
+            ..Default::default()
+        };
+        let v = &mut self.voices[voice_idx];
+        v.sample_osc1
+            .trigger(sample.clone(), note, 127, &params, self.sample_rate, 0);
+        v.sample_osc2
+            .trigger(sample, note, 127, &params, self.sample_rate, 0);
     }
 
     pub fn note_off(&mut self, note: u8) {
@@ -241,6 +280,20 @@ impl Synome {
         let volume = p[Param::Volume as usize];
         let pan = p[Param::Pan as usize];
         let drive = p[Param::MasterDrive as usize];
+
+        // Sample-oscillator setup (constant per block): mode per osc, the
+        // frequency the sample plays 1:1 at, and the source/host rate
+        // ratio. `osc freq / root freq * rate ratio` is the per-sample
+        // playback step — all pitch modulation (coarse/fine/LFO/env/tune)
+        // is already inside the osc frequency, so a sample osc glides and
+        // vibratos exactly like a BLEP osc.
+        let osc1_mode = OscMode::from_index(p[Param::Osc1Mode as usize].round() as u8);
+        let osc2_mode = OscMode::from_index(p[Param::Osc2Mode as usize].round() as u8);
+        let sample_root_freq = midi_to_freq(p[Param::SampleRootKey as usize].round());
+        let sample_rate_ratio = self
+            .sample_slot
+            .as_ref()
+            .map(|s| s.sample_rate as f64 / self.sample_rate as f64);
 
         for i in 0..output_l.len() {
             let lfo_val = self.global_lfo.process();
@@ -320,7 +373,19 @@ impl Synome {
 
                 // Process OSC2 first (for FM and sync)
                 let osc2_shape = p[Param::Osc2Shape as usize];
-                let (osc2_out, osc2_wrapped) = voice.osc2.process(osc2_shape, 0.0);
+                let (osc2_out, osc2_wrapped) = if osc2_mode == OscMode::Sample {
+                    let out = match sample_rate_ratio {
+                        Some(rr) => {
+                            let ratio = ((osc2_freq / sample_root_freq) as f64 * rr).max(0.0);
+                            voice.sample_osc2.tick_pitched(ratio)
+                        }
+                        None => 0.0,
+                    };
+                    // A sample reader has no phase wrap → never a sync source.
+                    (out, false)
+                } else {
+                    voice.osc2.process(osc2_shape, 0.0)
+                };
 
                 // FM amount with modulation
                 let mut fm_amount = p[Param::Osc1FmAmount as usize];
@@ -333,11 +398,31 @@ impl Synome {
 
                 // Process OSC1 with FM
                 let osc1_shape = p[Param::Osc1Shape as usize];
-                let (osc1_out, _) = voice.osc1.process(osc1_shape, osc2_out * fm_amount);
+                let osc1_out = if osc1_mode == OscMode::Sample {
+                    match sample_rate_ratio {
+                        Some(rr) => {
+                            // FM against a sample reader = playback-rate
+                            // modulation by the modulator's signal value.
+                            let ratio = ((osc1_freq / sample_root_freq) as f64
+                                * rr
+                                * (1.0 + (osc2_out * fm_amount) as f64))
+                                .max(0.0);
+                            voice.sample_osc1.tick_pitched(ratio)
+                        }
+                        None => 0.0,
+                    }
+                } else {
+                    let (o, _) = voice.osc1.process(osc1_shape, osc2_out * fm_amount);
+                    o
+                };
 
-                // Hard sync: OSC2 resets OSC1
+                // Hard sync: OSC2 resets OSC1 (a sample osc1 rewinds).
                 if p[Param::Osc2Sync as usize] > 0.5 && osc2_wrapped {
-                    voice.osc1.sync();
+                    if osc1_mode == OscMode::Sample {
+                        voice.sample_osc1.restart();
+                    } else {
+                        voice.osc1.sync();
+                    }
                 }
 
                 // Mixer
@@ -476,6 +561,57 @@ mod tests {
             tail_peak = l.iter().fold(0.0f32, |m, x| m.max(x.abs()));
         }
         assert!(tail_peak < 0.001, "silent after release, peak={tail_peak}");
+    }
+
+    #[test]
+    fn sample_osc_plays_and_repitches() {
+        let mut s = Synome::new(48000.0);
+        // A 480-frame 100 Hz-ish ramp at 48 kHz.
+        let n = 4800;
+        s.set_sample(Some(Arc::new(SampleData {
+            sample_rate: 48000,
+            channels: 1,
+            frame_count: n,
+            left: (0..n).map(|i| ((i % 480) as f32 / 240.0) - 1.0).collect(),
+            right: vec![],
+        })));
+        s.set_param_value(Param::Osc1Mode as usize, 4.0); // Sample
+        s.set_param_value(Param::SampleRootKey as usize, 60.0);
+        s.set_param_value(Param::MixOsc1 as usize, 1.0);
+
+        // At the root key the reader steps 1:1 — audible output.
+        s.note_on(60, 100);
+        let mut l = [0.0f32; 512];
+        let mut r = [0.0f32; 512];
+        s.process(&mut l, &mut r);
+        let peak = l.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(peak > 0.01, "sample osc audible at root, peak={peak}");
+
+        // An octave up consumes the (looped) sample twice as fast —
+        // compare positions indirectly by rendering the same length and
+        // checking the outputs differ (different read rates).
+        s.all_notes_off();
+        s.note_on(72, 100);
+        let mut l2 = [0.0f32; 512];
+        let mut r2 = [0.0f32; 512];
+        s.process(&mut l2, &mut r2);
+        let peak2 = l2.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(peak2 > 0.01, "sample osc audible an octave up");
+        assert_ne!(l[100], l2[100], "different pitches read differently");
+    }
+
+    #[test]
+    fn sample_mode_without_sample_is_silent_not_broken() {
+        let mut s = Synome::new(48000.0);
+        s.set_param_value(Param::Osc1Mode as usize, 4.0);
+        s.set_param_value(Param::MixOsc1 as usize, 1.0);
+        s.set_param_value(Param::MixOsc2 as usize, 0.0);
+        s.set_param_value(Param::MixNoise as usize, 0.0);
+        s.note_on(60, 100);
+        let mut l = [0.0f32; 256];
+        let mut r = [0.0f32; 256];
+        s.process(&mut l, &mut r);
+        assert!(l.iter().all(|x| x.abs() < 1e-6), "no sample → silence");
     }
 
     #[test]

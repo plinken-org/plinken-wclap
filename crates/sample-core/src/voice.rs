@@ -174,6 +174,12 @@ impl SampleVoice {
         }
     }
 
+    /// Rewind to the start of the sample without retriggering the
+    /// envelope — hard-sync for the sample-as-oscillator path.
+    pub fn restart(&mut self) {
+        self.position = 0.0;
+    }
+
     /// Hard stop. Clicks — prefer [`SampleVoice::choke`].
     pub fn kill(&mut self) {
         self.state = VoiceState::Idle;

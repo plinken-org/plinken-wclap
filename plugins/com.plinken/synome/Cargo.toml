@@ -13,3 +13,4 @@ crate-type = ["cdylib"]
 # no_std runtime (dlmalloc + panic handler) so std's own are used.
 wclap-plugin = { path = "../../../crates/wclap-plugin", default-features = false }
 plinken-dsp = { path = "../../../crates/plinken-dsp" }
+plinken-sample-core = { path = "../../../crates/sample-core" }

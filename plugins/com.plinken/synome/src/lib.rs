@@ -10,6 +10,8 @@ mod params;
 mod synth;
 
 use params::{PARAM_COUNT, PARAM_DEFS};
+use plinken_sample_core::{AssembleResult, SampleAssembler, SampleData};
+use std::sync::Arc;
 use synth::Synome;
 use wclap_plugin::{
     init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus,
@@ -36,6 +38,11 @@ struct SynomePlugin {
     /// state replay ahead of `activate` (hosts do this) survives, and so
     /// `get_param`/state save never need the DSP side.
     values: [f64; PARAM_COUNT],
+    /// PLSP chunk reassembly for the instrument's sample slot (0).
+    assembler: SampleAssembler,
+    /// Sample kept plugin-side so a (re)activate can re-install it into
+    /// the freshly built synth.
+    sample: Option<Arc<SampleData>>,
 }
 
 impl SynomePlugin {
@@ -50,6 +57,8 @@ impl Plugin for SynomePlugin {
         SynomePlugin {
             synth: None,
             values: core::array::from_fn(|i| PARAM_DEFS[i].default),
+            assembler: SampleAssembler::new(),
+            sample: None,
         }
     }
 
@@ -58,6 +67,7 @@ impl Plugin for SynomePlugin {
         for (i, v) in self.values.iter().enumerate() {
             s.set_param_value(i, *v as f32);
         }
+        s.set_sample(self.sample.clone());
         self.synth = Some(s);
     }
 
@@ -106,6 +116,33 @@ impl Plugin for SynomePlugin {
 
     fn params() -> &'static [ParamDef] {
         &PARAM_DEFS
+    }
+
+    fn on_message(&mut self, bytes: &[u8]) -> bool {
+        match self.assembler.push(bytes) {
+            AssembleResult::Complete { slot: 0, sample } => {
+                let arc = Arc::new(sample);
+                self.sample = Some(arc.clone());
+                if let Some(s) = &mut self.synth {
+                    s.set_sample(Some(arc));
+                }
+                true
+            }
+            AssembleResult::Cleared { slot: 0 } => {
+                self.sample = None;
+                if let Some(s) = &mut self.synth {
+                    s.set_sample(None);
+                }
+                true
+            }
+            // Synome has exactly one sample slot; other slots are ignored
+            // but still consumed (they're PLSP traffic, not param CBOR).
+            AssembleResult::Complete { .. }
+            | AssembleResult::Cleared { .. }
+            | AssembleResult::Progress { .. }
+            | AssembleResult::Error => true,
+            AssembleResult::NotMine => false,
+        }
     }
 
     fn process(&mut self, ctx: &mut ProcessCtx) -> ProcessStatus {
