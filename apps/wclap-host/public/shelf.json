@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "generatedAt": "2026-06-15T04:56:20.343Z",
+  "generatedAt": "2026-07-07T04:13:55.245Z",
   "items": [
     {
       "id": "com.plinken.auto-pan",
@@ -34,6 +34,45 @@
           "features": [
             "audio-effect",
             "utility"
+          ],
+          "has_ui": true
+        }
+      ]
+    },
+    {
+      "id": "com.plinken.brick-limiter",
+      "label": "Plinken: Brick Limiter",
+      "url": "/samples/com.plinken.brick-limiter.wclap.tar.gz",
+      "vendor": "Plinken",
+      "license": "MIT",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/brick-limiter",
+      "version": "0.0.3",
+      "description": "Lookahead brickwall peak limiter (2 ms lookahead — adds latency; use on buses/master, not for tracking).",
+      "features": [
+        "audio-effect",
+        "limiter",
+        "mastering"
+      ],
+      "homepage": "https://plinken.org",
+      "has_ui": true,
+      "ui": {
+        "compact_size": {
+          "width": 360,
+          "height": 56
+        },
+        "expanded_size": {
+          "width": 480,
+          "height": 240
+        }
+      },
+      "plugins": [
+        {
+          "id": "com.plinken.brick-limiter",
+          "name": "Brick Limiter",
+          "features": [
+            "audio-effect",
+            "limiter",
+            "mastering"
           ],
           "has_ui": true
         }
