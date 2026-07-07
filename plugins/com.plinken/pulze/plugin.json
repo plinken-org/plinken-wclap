@@ -1,0 +1,23 @@
+{
+  "manifest_version": 1,
+  "id": "com.plinken.pulze",
+  "name": "Pulze",
+  "vendor": "Plinken",
+  "version": "0.0.1",
+  "description": "MPC-style drum machine — dynamic pads, Akai note layout, synthesized kits. (Phase A scaffold — silent.)",
+  "features": ["instrument", "drum-machine"],
+  "license": "MIT",
+  "homepage": "https://plinken.org",
+  "source": "src/",
+  "artifact": "dist/pulze.wclap.tar.gz",
+  "format": "tar.gz",
+  "has_ui": false,
+  "plugins": [
+    {
+      "id": "com.plinken.pulze",
+      "name": "Pulze",
+      "features": ["instrument", "drum-machine"],
+      "has_ui": false
+    }
+  ]
+}

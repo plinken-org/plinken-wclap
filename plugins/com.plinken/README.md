@@ -11,6 +11,7 @@ Plugins authored by **Plinken** ([plinken.com](https://plinken.com) /
 | `auto-pan`        | AssemblyScript | LFO panner |
 | `spectrum`        | Rust (fundsp)  | FFT analyser, UI-only |
 | `synome`          | Rust           | Polysynth scaffold |
+| `pulze`           | Rust           | MPC-style drum machine scaffold — dynamic pads, Akai note layout + bank switch, Akai patch import planned |
 | `vocal-limiter`   | Rust (fundsp)  | Lookahead brickwall |
 | `organ`           | **Cmajor**     | Hammond drawbar synth — first user of the `cmaj → WASI-SDK → .wclap` pipeline (`scripts/build-cmaj-wclap.sh`) |
 | `piano`           | **Cmajor**     | Additive piano w/ stretched tuning — second pipeline user, pure-synthesis variant (no externals) |

@@ -75,6 +75,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "com-plinken-pulze"
+version = "0.0.1"
+dependencies = [
+ "wclap-plugin",
+]
+
+[[package]]
 name = "com-plinken-reverb"
 version = "0.1.0"
 dependencies = [
