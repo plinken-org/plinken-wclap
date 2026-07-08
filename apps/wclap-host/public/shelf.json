@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "generatedAt": "2026-07-07T20:12:37.300Z",
+  "generatedAt": "2026-07-08T07:48:21.604Z",
   "items": [
     {
       "id": "com.plinken.auto-pan",
@@ -447,7 +447,7 @@
       "vendor": "Plinken",
       "license": "MIT",
       "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.plinken/synome",
-      "version": "0.1.3",
+      "version": "0.1.6",
       "description": "Moog-style polysynth — 2 oscillators (FM, hard sync), ladder filter, 3 ADSRs, LFO, chorus/phaser/flanger, delay, reverb.",
       "features": [
         "instrument",
@@ -456,9 +456,13 @@
       "homepage": "https://plinken.org",
       "has_ui": true,
       "ui": {
+        "compact_size": {
+          "width": 300,
+          "height": 120
+        },
         "expanded_size": {
           "width": 1080,
-          "height": 700
+          "height": 760
         }
       },
       "plugins": [

@@ -18,8 +18,20 @@
   .pots { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; justify-content: center; }
   .toggles { display: flex; align-items: center; gap: 8px; }
 
-  /* Expanded-only UI — the catalog declares no compact size, so the DAW
-     shows a name tile in the chain and opens this in the floating panel. */
+  /* Compact layout — a single strip of Filter Freq/Res + Volume. The size
+     probe at the bottom of the script toggles .compact/.expanded on #root
+     based on the width the host gives us (compact_size vs expanded_size in
+     plugin.json), so the same UI serves both the chain tile and the panel. */
+  .root.compact { grid-template-rows: 1fr; padding: 4px 8px; }
+  .root.compact .title { display: none; }
+  .root.compact .body { flex-direction: row; align-items: center; justify-content: center; gap: 10px; height: 100%; }
+  .root.compact .row { display: contents; }
+  .root.compact .section:not(.compact-show) { display: none; }
+  .root.compact .section.compact-show { flex-direction: row; align-items: center; gap: 8px; padding: 4px 8px; }
+  .root.compact .section.compact-show .section-name,
+  .root.compact .section.compact-show .toggles { display: none; }
+  .root.compact .section.compact-show .pots { flex-wrap: nowrap; gap: 8px; }
+  .root.compact .section.compact-show .pots > div:not(.compact-show) { display: none; }
 </style>
 </head>
 <body>
@@ -64,10 +76,10 @@
     </div>
 
     <div class="row">
-      <div class="section">
+      <div class="section compact-show">
         <div class="section-name">FILTER</div>
         <div class="pots">
-          <div id="f-mode"></div><div id="f-freq"></div><div id="f-res"></div>
+          <div id="f-mode"></div><div id="f-freq" class="compact-show"></div><div id="f-res" class="compact-show"></div>
           <div id="f-key"></div><div id="f-env-amt"></div><div id="f-lfo-amt"></div>
         </div>
         <div class="toggles">
@@ -113,10 +125,10 @@
           <div id="sfx-fb"></div><div id="sfx-damp"></div>
         </div>
       </div>
-      <div class="section">
+      <div class="section compact-show">
         <div class="section-name">OUTPUT</div>
         <div class="pots">
-          <div id="out-vol"></div><div id="out-pan"></div><div id="out-drive"></div><div id="out-voices"></div>
+          <div id="out-vol" class="compact-show"></div><div id="out-pan"></div><div id="out-drive"></div><div id="out-voices"></div>
           <div id="out-tune"></div>
         </div>
       </div>
@@ -182,7 +194,7 @@
     [P.MIX_O1]: new Pot(el('mix-o1'), { id: P.MIX_O1, min: 0, max: 1, default: 0.7, label: 'Osc 1', format: pct }),
     [P.MIX_O2]: new Pot(el('mix-o2'), { id: P.MIX_O2, min: 0, max: 1, default: 0, label: 'Osc 2', format: pct }),
     [P.MIX_NOISE]: new Pot(el('mix-noise'), { id: P.MIX_NOISE, min: 0, max: 1, default: 0, label: 'Noise', format: pct }),
-    [P.SMP_ROOT]: new Pot(el('smp-root'), { id: P.SMP_ROOT, min: 0, max: 127, default: 60, label: 'Root', format: noteName }),
+    [P.SMP_ROOT]: new Pot(el('smp-root'), { id: P.SMP_ROOT, min: 0, max: 127, default: 60, label: 'Sample Root', format: noteName }),
     [P.PITCH_MOD]: new Pot(el('pitch-mod'), { id: P.PITCH_MOD, min: 0, max: 24, default: 0, label: 'P.Mod', format: st }),
     [P.GLIDE]: new Pot(el('glide'), { id: P.GLIDE, min: 0, max: 2000, default: 0, label: 'Glide', format: (v) => `${Math.round(v)}ms` }),
     [P.F_MODE]: new Pot(el('f-mode'), { id: P.F_MODE, min: 0, max: 2, default: 0, label: 'Mode', format: pick(F_MODES) }),
@@ -251,6 +263,19 @@
     }
   });
   transport.sendReady();
+
+  // Layout probe: the host sizes our iframe to compact_size or expanded_size
+  // (plugin.json). Below the midpoint of those two widths we render the
+  // compact strip (Filter Freq/Res + Volume); above it, the full panel.
+  const root = el('root');
+  const COMPACT_MAX_WIDTH = 600; // between compact (300) and expanded (1080)
+  const applyLayout = () => {
+    const compact = window.innerWidth <= COMPACT_MAX_WIDTH;
+    root.classList.toggle('compact', compact);
+    root.classList.toggle('expanded', !compact);
+  };
+  applyLayout();
+  window.addEventListener('resize', applyLayout);
 </script>
 </body>
 </html>

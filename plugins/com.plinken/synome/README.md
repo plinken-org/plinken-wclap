@@ -28,6 +28,25 @@ saved state blobs — only append).
 Arpeggiator params (61–66) are declared but inert, same as the source
 engine. The NNUE match-sound feature is not ported yet.
 
+## TODO
+
+- **Oscillator engines — implement WTbl / Gran / Phys.** The OSC Mode pot
+  offers five engines (`Anlg` / `WTbl` / `Gran` / `Phys` / `Smpl`) but only
+  **Analog** and **Sample** actually work today. Two gaps:
+  1. `crates/plinken-dsp/src/osc.rs` — `Oscillator::process` matches on mode,
+     but `Wavetable`, `Granular` and `Physical` all fall through to
+     `process_analog` (marked `// TODO`). Implement real wavetable scan,
+     granular cloud, and Karplus-Strong physical modelling.
+  2. `src/synth.rs` — the per-voice oscillator's `set_mode` is **never
+     called** (only `== OscMode::Sample` is tested, lines ~376/401/421), so
+     even once the DSP exists the mode must be pushed to `voice.osc1` /
+     `voice.osc2` each block for non-Sample modes.
+
+  Until then, selecting WTbl/Gran/Phys sounds identical to Analog. Options if
+  we ship before implementing: hide those positions from the Mode pot
+  (`ui/index.html` `OSC_MODES` + pot `max`) so the UI doesn't advertise
+  engines that don't exist.
+
 ## Build & test
 
 ```sh
