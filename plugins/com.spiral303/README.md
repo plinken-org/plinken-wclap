@@ -11,7 +11,7 @@ entry: a TB-303 line.
 
 ## Contact
 
-- Source: [github.com/spiralfractal/spiral303_vst](https://github.com/spiralfractal/spiral303_vst)
+- Source: [github.com/Spiralfractalplugins/spiral303](https://github.com/Spiralfractalplugins/spiral303)
 - GitHub org for this vendor folder: [Spiralfractalplugins](https://github.com/Spiralfractalplugins)
 
 ## License

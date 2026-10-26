@@ -14,8 +14,8 @@
     "monophonic"
   ],
   "license": "Apache-2.0",
-  "homepage": "https://github.com/spiralfractal/spiral303_vst",
-  "source": "https://github.com/spiralfractal/spiral303_vst",
+  "homepage": "https://github.com/Spiralfractalplugins/spiral303",
+  "source": "https://github.com/Spiralfractalplugins/spiral303",
   "artifact": "dist/spiral303.wclap.tar.gz",
   "format": "tar.gz",
   "has_ui": true,

@@ -34,8 +34,8 @@ incoming notes run through the same filter and distortion.
 The bundle in `dist/` is produced by the source repository:
 
 ```sh
-git clone https://github.com/spiralfractal/spiral303_vst
-cd spiral303_vst
+git clone https://github.com/Spiralfractalplugins/spiral303
+cd spiral303
 tools/build_wclap.sh        # → dist/Spiral303-<version>-wclap-registry.tar.gz
 ```
 

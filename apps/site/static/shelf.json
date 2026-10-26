@@ -572,7 +572,7 @@
         "acid",
         "monophonic"
       ],
-      "homepage": "https://github.com/spiralfractal/spiral303_vst",
+      "homepage": "https://github.com/Spiralfractalplugins/spiral303",
       "hint": "needs MIDI - at a host that supports midi the pattern plays on a keyboard note",
       "has_ui": true,
       "ui": {
