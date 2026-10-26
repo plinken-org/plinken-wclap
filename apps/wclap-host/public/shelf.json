@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "generatedAt": "2026-08-14T12:47:33.575Z",
+  "generatedAt": "2026-10-26T09:16:19.893Z",
   "items": [
     {
       "id": "com.plinken.auto-pan",
@@ -550,6 +550,48 @@
             "audio-effect",
             "limiter",
             "vocal"
+          ],
+          "has_ui": true
+        }
+      ]
+    },
+    {
+      "id": "com.spiral303.plugin",
+      "label": "Spiralfractal: Spiral303",
+      "url": "/samples/com.spiral303.plugin.wclap.tar.gz",
+      "vendor": "Spiralfractal",
+      "license": "Apache-2.0",
+      "source": "https://github.com/plinken-org/plinken-wclap/tree/main/plugins/com.spiral303/spiral303",
+      "version": "0.37.0",
+      "description": "A Roland TB-303 emulation: morphing wave oscillator, resonant filter with accent and slide, a gate wheel, a distortion row and a full step sequencer, all in a canvas interface.",
+      "features": [
+        "instrument",
+        "synthesizer",
+        "bass",
+        "lead",
+        "acid",
+        "monophonic"
+      ],
+      "homepage": "https://github.com/Spiralfractalplugins/spiral303",
+      "hint": "needs MIDI - at a host that supports midi the pattern plays on a keyboard note",
+      "has_ui": true,
+      "ui": {
+        "expanded_size": {
+          "width": 1180,
+          "height": 780
+        }
+      },
+      "plugins": [
+        {
+          "id": "com.spiral303.plugin",
+          "name": "Spiral303",
+          "features": [
+            "instrument",
+            "synthesizer",
+            "bass",
+            "lead",
+            "acid",
+            "monophonic"
           ],
           "has_ui": true
         }
