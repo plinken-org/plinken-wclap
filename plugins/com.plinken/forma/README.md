@@ -21,10 +21,16 @@ and are verified in `apps/wclap-host`. See [Not yet built](#not-yet-built).
 - **Either engine in either slot.** Default: Grain in A, Spectral in B.
 - **Mix:** `Fade` crossfades A ↔ B (equal power). `Ring` goes A alone →
   ring product A×B at the centre → B alone.
-- **Placement is mid/side.** Per slot, `Spread` is how much stereo the
-  engine generates (per-grain pan / left-right detune), `Width` scales the
-  side signal (0 = mono, 2 = doubled) and `Balance` pans the mid. Default:
-  A near the centre (25 %), B wide (150 %).
+- **Placement is mid/side.** Per slot, `Width` scales everything stereo
+  the slot makes (0 = one point, 2 = doubled), `Balance` says where that
+  point sits, and `Spread` is how much stereo there is to scale: per-grain
+  pan, left-right detune, and a fan that puts successive notes on
+  alternating sides. Default: A left, B right (±60 %), both at full width,
+  so the two slots open the field between them.
+- **Output:** a zero-latency peak limiter (ceiling ≈ −1 dBFS, 25 ms hold,
+  120 ms release, channels linked) follows the filter, so a resonant peak
+  or a big chord is turned down instead of clipped. The panel's meter
+  turns amber while it works.
 - 12 voices; retrigger → free → oldest released → oldest.
 
 ## Grain engine (`src/grain.rs`)

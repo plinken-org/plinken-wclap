@@ -71,7 +71,7 @@ const fn p(id: u32, flags: u32, name: &'static str, module: &'static str, min: f
 }
 
 macro_rules! slot_params {
-    ($base:expr, $tag:literal, $module:literal, $engine:expr, $width:expr) => {
+    ($base:expr, $tag:literal, $module:literal, $engine:expr, $width:expr, $balance:expr) => {
         [
             p($base + ENGINE, S, concat!($tag, " Engine\0"), $module, 0.0, 1.0, $engine),
             p($base + LEVEL, A, concat!($tag, " Level\0"), $module, 0.0, 1.0, 0.8),
@@ -79,7 +79,7 @@ macro_rules! slot_params {
             p($base + POSITION, A, concat!($tag, " Position\0"), $module, 0.0, 1.0, 0.1),
             p($base + SCAN, A, concat!($tag, " Scan\0"), $module, -2.0, 2.0, 0.0),
             p($base + WIDTH, A, concat!($tag, " Width\0"), $module, 0.0, 2.0, $width),
-            p($base + BALANCE, A, concat!($tag, " Balance\0"), $module, -1.0, 1.0, 0.0),
+            p($base + BALANCE, A, concat!($tag, " Balance\0"), $module, -1.0, 1.0, $balance),
             p($base + SPREAD, A, concat!($tag, " Spread\0"), $module, 0.0, 1.0, 0.5),
             p($base + G_RATE, A, concat!($tag, " Grain Rate\0"), $module, -8.0, 2.0, 0.0),
             p($base + G_TRACK, S, concat!($tag, " Grain Key Track\0"), $module, 0.0, 1.0, 1.0),
@@ -112,9 +112,10 @@ const GLOBALS: [ParamDef; GLOBAL_COUNT] = [
     p(ENV_R, A, "Release\0", "Envelope\0", 0.001, 8.0, 0.4),
     p(VEL, A, "Velocity\0", "\0", 0.0, 1.0, 0.5),
 ];
-// Slot A defaults to a centred grain engine, slot B to a wide spectral one.
-const SLOT_A_DEFS: [ParamDef; SLOT_COUNT] = slot_params!(SLOT_A, "A", "Slot A\0", 0.0, 0.25);
-const SLOT_B_DEFS: [ParamDef; SLOT_COUNT] = slot_params!(SLOT_B, "B", "Slot B\0", 1.0, 1.5);
+// The two slots open the stereo field between them: A (grain) sits left,
+// B (spectral) right, each at full width.
+const SLOT_A_DEFS: [ParamDef; SLOT_COUNT] = slot_params!(SLOT_A, "A", "Slot A\0", 0.0, 1.0, -0.6);
+const SLOT_B_DEFS: [ParamDef; SLOT_COUNT] = slot_params!(SLOT_B, "B", "Slot B\0", 1.0, 1.0, 0.6);
 
 pub static PARAM_DEFS: [ParamDef; PARAM_COUNT] = {
     let mut out = [const { p(0, 0, "\0", "\0", 0.0, 0.0, 0.0) }; PARAM_COUNT];

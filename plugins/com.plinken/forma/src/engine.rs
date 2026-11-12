@@ -25,6 +25,14 @@ const CONTROL_PERIOD: usize = 32;
 const POSITION_GLIDE_SECONDS: f32 = 0.06;
 /// Time the spectral layer gains take to follow the envelopes.
 const LAYER_GLIDE_SECONDS: f32 = 0.004;
+/// Output ceiling of the peak limiter (about -1 dBFS).
+const LIMIT_CEILING: f32 = 0.89;
+/// Time the limiter takes to let go after a peak.
+const LIMIT_RELEASE_SECONDS: f32 = 0.12;
+/// How long the limiter holds its gain after a peak before letting go:
+/// longer than one cycle of the lowest notes, so the gain does not creep
+/// back up between the crests of a bass note and flatten each one anew.
+const LIMIT_HOLD_SECONDS: f32 = 0.025;
 /// Reference pitch for grain rate with key tracking off (C3).
 const FREE_RATE_HZ: f32 = 130.812_78;
 /// Make-up gain for the ring product of two signals well below full scale.
@@ -72,7 +80,15 @@ struct SlotVoice {
     ctl: SlotCtl,
     /// Engine the control values were last built for.
     kind: Option<EngineKind>,
+    /// Where this voice's share of the slot sits in the stereo field.
+    place: Placement,
 }
+
+/// Where successive notes sit around their slot's balance, as a fraction
+/// of the way to the far side: alternating left and right, so a chord
+/// fans out across the field instead of stacking on one point.
+const NOTE_PANS: [f32; 8] = [-0.35, 0.35, -0.7, 0.7, -0.15, 0.15, -0.55, 0.55];
+const CENTRE: Placement = Placement { mid_l: 1.0, mid_r: 1.0, side: 1.0 };
 
 #[derive(Clone, Copy, Default)]
 struct Svf {
@@ -111,6 +127,8 @@ struct Voice {
     vel: f32,
     /// Order of note-on, for stealing the oldest voice.
     serial: u64,
+    /// This note's place around the slot balance (one of [`NOTE_PANS`]).
+    pan: f32,
     env: Envelope,
     slots: [SlotVoice; SLOTS],
     filter: [Svf; 2],
@@ -125,7 +143,6 @@ pub struct Engine {
     /// Samples until the next control refresh.
     control_in: usize,
     // Control-rate values shared by all voices.
-    place: [Placement; SLOTS],
     mix: [f32; 3],
     filt_on: bool,
     filt_g: f32,
@@ -140,6 +157,10 @@ pub struct Engine {
     out_peak: f32,
     /// The Position control per slot, after its glide.
     position: [f32; SLOTS],
+    /// Current gain of the output limiter (1 = not limiting).
+    limit_gain: f32,
+    /// Samples left before the limiter may start to release.
+    limit_hold: u32,
 }
 
 impl Engine {
@@ -151,6 +172,7 @@ impl Engine {
             note: 0,
             vel: 0.0,
             serial: 0,
+            pan: 0.0,
             env: Envelope::new(sr),
             slots: core::array::from_fn(|s| SlotVoice {
                 grain: GrainVoice::new(0x9e37_79b9u32.wrapping_mul((i * SLOTS + s + 1) as u32)),
@@ -158,6 +180,7 @@ impl Engine {
                 scan: 0.0,
                 ctl: SlotCtl::Off,
                 kind: None,
+                place: CENTRE,
             }),
             filter: [Svf::default(); 2],
         };
@@ -168,7 +191,6 @@ impl Engine {
             voices: (0..VOICES).map(voice).collect(),
             serial: 0,
             control_in: 0,
-            place: [Placement { mid_l: 1.0, mid_r: 1.0, side: 1.0 }; SLOTS],
             mix: [0.0; 3],
             filt_on: false,
             filt_g: 0.0,
@@ -180,6 +202,8 @@ impl Engine {
             playhead: [0.0; SLOTS],
             out_peak: 0.0,
             position: [0.0; SLOTS],
+            limit_gain: 1.0,
+            limit_hold: 0,
         };
         for slot in 0..SLOTS {
             e.position[slot] = e.slot_value(slot, P::POSITION);
@@ -255,6 +279,7 @@ impl Engine {
         v.note = note;
         v.vel = 1.0 - sens + sens * velocity.clamp(0.0, 1.0);
         v.serial = serial;
+        v.pan = NOTE_PANS[(serial % NOTE_PANS.len() as u64) as usize];
         v.env = Envelope::new(self.sr);
         v.env.set_adsr(a, d, s, r);
         v.env.trigger();
@@ -300,14 +325,6 @@ impl Engine {
 
     /// Recompute the values shared by all voices.
     fn refresh_globals(&mut self) {
-        for slot in 0..SLOTS {
-            let theta = (self.slot_value(slot, P::BALANCE).clamp(-1.0, 1.0) + 1.0) * FRAC_PI_4;
-            self.place[slot] = Placement {
-                mid_l: SQRT_2 * theta.cos(),
-                mid_r: SQRT_2 * theta.sin(),
-                side: self.slot_value(slot, P::WIDTH),
-            };
-        }
         let fade = self.values[P::FADE as usize].clamp(0.0, 1.0);
         self.mix = if self.values[P::MIX_MODE as usize] >= 0.5 {
             // A alone → ring product → B alone.
@@ -334,6 +351,7 @@ impl Engine {
     /// the note's first refresh (no scan advance, no gain glide).
     fn refresh_voice(&mut self, index: usize, start: bool) {
         let note = self.voices[index].note as f32;
+        let note_pan = self.voices[index].pan;
         let (a, d, s, r) = (
             self.values[P::ENV_A as usize],
             self.values[P::ENV_D as usize],
@@ -350,10 +368,18 @@ impl Engine {
             };
             let kind = if val(P::ENGINE) >= 0.5 { EngineKind::Spectral } else { EngineKind::Grain };
             let level = val(P::LEVEL);
+            // Mid/side placement. Width scales everything stereo the slot
+            // makes (0 = one point), Balance says where that point is, and
+            // Spread fans the notes out around it.
+            let width = val(P::WIDTH);
+            let fan = note_pan * val(P::SPREAD) * width.min(1.0);
+            let theta = ((val(P::BALANCE) + fan).clamp(-1.0, 1.0) + 1.0) * FRAC_PI_4;
+            let place = Placement { mid_l: SQRT_2 * theta.cos(), mid_r: SQRT_2 * theta.sin(), side: width };
             let note_hz = midi_to_freq(note + val(P::TUNE));
             let scan_per_sample = val(P::SCAN) as f64 / (src.seconds() as f64 * self.sr as f64);
 
             let sv = &mut self.voices[index].slots[slot];
+            sv.place = place;
             if !start {
                 sv.scan += scan_per_sample * CONTROL_PERIOD as f64;
                 sv.scan -= sv.scan.floor();
@@ -444,7 +470,7 @@ impl Engine {
     }
 
     fn render(&mut self, out_l: &mut [f32], out_r: &mut [f32]) {
-        let (place, mix) = (self.place, self.mix);
+        let mix = self.mix;
         let (filt_on, g, k, a1, mode) = (self.filt_on, self.filt_g, self.filt_k, self.filt_a1, self.filt_mode);
         let content = &self.content;
         for v in self.voices.iter_mut().filter(|v| v.active) {
@@ -458,8 +484,9 @@ impl Engine {
                         _ => (0.0, 0.0),
                     };
                     // Mid/side placement: width scales the side, balance pans the mid.
-                    let (mid, side) = (0.5 * (l + r), 0.5 * (l - r) * place[slot].side);
-                    s[slot] = (mid * place[slot].mid_l + side, mid * place[slot].mid_r - side);
+                    let place = sv.place;
+                    let (mid, side) = (0.5 * (l + r), 0.5 * (l - r) * place.side);
+                    s[slot] = (mid * place.mid_l + side, mid * place.mid_r - side);
                 }
                 let mut l = mix[0] * s[0].0 + mix[1] * s[1].0 + mix[2] * s[0].0 * s[1].0;
                 let mut r = mix[0] * s[0].1 + mix[1] * s[1].1 + mix[2] * s[0].1 * s[1].1;
@@ -481,11 +508,35 @@ impl Engine {
                 v.active = false;
             }
         }
+        // Peak limiter: a resonant filter or a big chord can exceed full
+        // scale by a wide margin. No lookahead, so no latency: the gain
+        // drops at once to whatever keeps the loudest channel at the
+        // ceiling (both channels together, so the image does not move),
+        // holds there for a cycle of the lowest notes, then recovers
+        // slowly — over a held note it settles to a steady gain instead of
+        // reshaping every cycle.
+        let release = 1.0 - (-1.0 / (LIMIT_RELEASE_SECONDS * self.sr)).exp();
+        let hold = (LIMIT_HOLD_SECONDS * self.sr) as u32;
         for i in 0..out_l.len() {
             self.volume += (self.volume_target - self.volume) * 0.002;
-            out_l[i] = soft_clip(out_l[i] * self.volume);
-            out_r[i] = soft_clip(out_r[i] * self.volume);
-            self.out_peak = self.out_peak.max(out_l[i].abs()).max(out_r[i].abs());
+            let (l, r) = (out_l[i] * self.volume, out_r[i] * self.volume);
+            let peak = l.abs().max(r.abs());
+            // The meter shows the level asked for, before limiting: above
+            // the ceiling it reads as "the limiter is working".
+            self.out_peak = self.out_peak.max(peak);
+            let want = if peak > LIMIT_CEILING { LIMIT_CEILING / peak } else { 1.0 };
+            if want < self.limit_gain {
+                self.limit_gain = want;
+                self.limit_hold = hold;
+            } else if self.limit_hold > 0 {
+                self.limit_hold -= 1;
+            } else {
+                self.limit_gain += (want - self.limit_gain) * release;
+            }
+            // The clip after it never engages below 1.0; it only guards
+            // against a non-finite or runaway value.
+            out_l[i] = soft_clip(l * self.limit_gain);
+            out_r[i] = soft_clip(r * self.limit_gain);
         }
     }
 }
@@ -613,26 +664,24 @@ mod tests {
             let side: Vec<f32> = l.iter().zip(&r).map(|(a, b)| a - b).collect();
             rms(&side) / rms(&mid)
         };
-        // Width 0 collapses a slot to mono, whatever the engine spreads.
+        // Width 0 collapses a centred slot to one point, whatever the
+        // engine spreads and wherever the note would have been fanned to.
         for slot in [P::SLOT_A, P::SLOT_B] {
-            let mut e = engine();
-            set(&mut e, P::FADE, if slot == P::SLOT_A { 0.0 } else { 1.0 });
-            set(&mut e, slot + P::SPREAD, 1.0);
-            set(&mut e, slot + P::WIDTH, 0.0);
-            assert!(side_ratio(&mut e) < 1e-4);
-            let mut e = engine();
-            set(&mut e, P::FADE, if slot == P::SLOT_A { 0.0 } else { 1.0 });
-            set(&mut e, slot + P::SPREAD, 1.0);
-            set(&mut e, slot + P::WIDTH, 2.0);
-            assert!(side_ratio(&mut e) > 0.05);
+            for width in [0.0f32, 2.0] {
+                let mut e = engine();
+                set(&mut e, P::FADE, if slot == P::SLOT_A { 0.0 } else { 1.0 });
+                set(&mut e, slot + P::BALANCE, 0.0);
+                set(&mut e, slot + P::SPREAD, 1.0);
+                set(&mut e, slot + P::WIDTH, width);
+                let ratio = side_ratio(&mut e);
+                if width == 0.0 {
+                    assert!(ratio < 1e-4, "width 0 left side energy {ratio}");
+                } else {
+                    assert!(ratio > 0.05, "width 2 gave no stereo ({ratio})");
+                }
+            }
         }
-        // The defaults put slot A nearer the centre than slot B.
-        let mut a = engine();
-        set(&mut a, P::FADE, 0.0);
-        let mut b = engine();
-        set(&mut b, P::FADE, 1.0);
-        assert!(side_ratio(&mut a) < side_ratio(&mut b));
-        // Balance hard left leaves the right channel with side only.
+        // Balance hard left leaves the right channel empty.
         let mut e = engine();
         set(&mut e, P::FADE, 0.0);
         set(&mut e, P::SLOT_A + P::WIDTH, 0.0);
@@ -640,6 +689,59 @@ mod tests {
         e.note_on(60, 1.0);
         let (l, r) = render(&mut e, 9600, 128);
         assert!(rms(&l) > 0.01 && rms(&r) < 1e-4 * rms(&l).max(1.0));
+    }
+
+    #[test]
+    fn the_default_patch_opens_the_field_left_and_right() {
+        let play = |fade: f32| {
+            let mut e = engine();
+            set(&mut e, P::FADE, fade);
+            e.note_on(60, 1.0);
+            let (l, r) = render(&mut e, 24_000, 128);
+            (rms(&l[4800..]), rms(&r[4800..]), l, r)
+        };
+        // Slot A alone sits left, slot B alone right, by a clear margin.
+        let (al, ar, ..) = play(0.0);
+        assert!(al > 1.5 * ar, "slot A: left {al}, right {ar}");
+        let (bl, br, ..) = play(1.0);
+        assert!(br > 1.5 * bl, "slot B: left {bl}, right {br}");
+        // Together they are wide: the side signal is a good part of the mid.
+        let (.., l, r) = play(0.5);
+        let mid: Vec<f32> = l.iter().zip(&r).map(|(a, b)| a + b).collect();
+        let side: Vec<f32> = l.iter().zip(&r).map(|(a, b)| a - b).collect();
+        assert!(rms(&side) > 0.4 * rms(&mid), "side {} against mid {}", rms(&side), rms(&mid));
+        // And it folds down to mono without disappearing.
+        assert!(rms(&mid) > 0.02);
+    }
+
+    #[test]
+    fn spread_fans_the_notes_of_a_chord_across_the_field() {
+        // One centred slot, no stereo from the engine itself except Spread.
+        let chord = |spread: f32| {
+            let mut e = engine();
+            set(&mut e, P::FADE, 1.0);
+            set(&mut e, P::SLOT_B + P::BALANCE, 0.0);
+            set(&mut e, P::SLOT_B + P::SPREAD, spread);
+            // Per-note levels left and right, one note at a time.
+            (0..4)
+                .map(|i| {
+                    e.note_on(48 + 5 * i, 1.0);
+                    let (l, r) = render(&mut e, 9600, 128);
+                    e.note_off(48 + 5 * i);
+                    render(&mut e, 48_000, 128);
+                    rms(&l[2400..]) / rms(&r[2400..])
+                })
+                .collect::<Vec<f32>>()
+        };
+        let fanned = chord(1.0);
+        // Successive notes land on opposite sides, some of them far out.
+        for pair in fanned.windows(2) {
+            assert!((pair[0] - 1.0) * (pair[1] - 1.0) < 0.0, "two notes in a row on one side: {fanned:?}");
+        }
+        assert!(fanned.iter().any(|r| *r > 1.4) && fanned.iter().any(|r| *r < 1.0 / 1.4), "{fanned:?}");
+        for ratio in chord(0.0) {
+            assert!((ratio - 1.0).abs() < 0.02, "spread 0 still pans: {ratio}");
+        }
     }
 
     #[test]
@@ -774,6 +876,52 @@ mod tests {
         assert!(soon > before && soon < 0.3, "after one block the read point is at {soon}");
         render(&mut e, 24_000, 128);
         assert!((e.playhead(0) - 0.9).abs() < 0.01, "after half a second it is at {}", e.playhead(0));
+    }
+
+    #[test]
+    fn the_limiter_holds_a_screaming_filter_under_the_ceiling() {
+        // Full resonance with the cutoff on a partial, a chord, everything up.
+        let mut e = engine();
+        set(&mut e, P::VOLUME, 1.0);
+        set(&mut e, P::F_RES, 1.0);
+        set(&mut e, P::F_CUTOFF, 523.25);
+        set(&mut e, P::SLOT_A + P::LEVEL, 1.0);
+        set(&mut e, P::SLOT_B + P::LEVEL, 1.0);
+        for n in [36u8, 48, 60, 64, 67, 72] {
+            e.note_on(n, 1.0);
+        }
+        let (l, r) = render(&mut e, 48_000, 128);
+        let asked = e.take_peak();
+        assert!(asked > 1.5, "the patch should overshoot without a limiter (asked for {asked})");
+        let peak = l.iter().chain(r.iter()).fold(0.0f32, |p, v| p.max(v.abs()));
+        assert!(peak <= LIMIT_CEILING + 1e-4, "peak {peak} above the ceiling");
+        // Limited, not squashed to nothing, and not clipped. Clipping this
+        // patch at the same ceiling would hold a large share of the samples
+        // flat; the limiter lets only brief crests touch it (under 1 % of
+        // the sustained part, never for as long as a millisecond). Those
+        // remain because there is no lookahead: when the notes of a chord
+        // beat upwards the gain follows the rise instead of anticipating it.
+        let sustained = &l[24_000..];
+        assert!(rms(sustained) > 0.1);
+        let pinned = |x: &[f32]| x.iter().filter(|v| v.abs() > 0.999 * LIMIT_CEILING).count();
+        let clipped: Vec<f32> = sustained.iter().map(|v| v / e.limit_gain).map(|v| v.clamp(-LIMIT_CEILING, LIMIT_CEILING)).collect();
+        assert!(pinned(sustained) * 100 < sustained.len(), "{} of {} samples at the ceiling", pinned(sustained), sustained.len());
+        assert!(pinned(&clipped) > 5 * pinned(sustained), "no better than clipping: {} vs {}", pinned(&clipped), pinned(sustained));
+        let (mut longest, mut run) = (0, 0);
+        for v in sustained {
+            run = if v.abs() > 0.999 * LIMIT_CEILING { run + 1 } else { 0 };
+            longest = longest.max(run);
+        }
+        assert!(longest < 48, "{longest} samples in a row at the ceiling");
+    }
+
+    #[test]
+    fn the_limiter_leaves_normal_playing_alone() {
+        let mut e = engine();
+        e.note_on(60, 0.8);
+        let (l, _) = render(&mut e, 24_000, 128);
+        assert!(l.iter().fold(0.0f32, |p, v| p.max(v.abs())) < LIMIT_CEILING);
+        assert_eq!(e.limit_gain, 1.0);
     }
 
     #[test]

@@ -136,16 +136,33 @@ impl Source {
         let mut data = vec![0.0f32; n];
         let mut rng = 0x9e37_79b9u32 ^ variant;
         let mut lp = 0.0f32;
+        // Each partial is a rotating phasor (two multiplies a sample) and
+        // the formant gains are refreshed every 64 samples: this runs when
+        // a plugin instance is created, on the host's audio thread, so it
+        // must not cost a sine and an exponential per partial per sample.
+        const PARTIALS: usize = 40;
+        let mut phasor = [(0.0f32, 1.0f32); PARTIALS];
+        let mut step = [(0.0f32, 0.0f32); PARTIALS];
+        let mut gain = [0.0f32; PARTIALS];
+        for (h, st) in step.iter_mut().enumerate() {
+            let w = 2.0 * PI * f0 * (h + 1) as f32 / sr;
+            *st = (w.sin(), w.cos());
+        }
         for (i, out) in data.iter_mut().enumerate() {
             let t = i as f32 / n as f32;
-            let formant = 400.0 + 2200.0 * (0.5 - 0.5 * (2.0 * PI * t).cos());
-            let ph = 2.0 * PI * f0 * i as f32 / sr;
+            if i % 64 == 0 {
+                let formant = 400.0 + 2200.0 * (0.5 - 0.5 * (2.0 * PI * t).cos());
+                for (h, g) in gain.iter_mut().enumerate() {
+                    let d = (f0 * (h + 1) as f32 - formant) / 500.0;
+                    *g = (0.25 + (-d * d).exp()) / (h + 1) as f32;
+                }
+            }
             let mut v = 0.0f32;
-            for h in 1..=40u32 {
-                let f = f0 * h as f32;
-                let d = (f - formant) / 500.0;
-                let a = (1.0 / h as f32) * (0.25 + (-d * d).exp());
-                v += a * (ph * h as f32).sin();
+            for h in 0..PARTIALS {
+                let (s0, c0) = phasor[h];
+                v += gain[h] * s0;
+                let (ds, dc) = step[h];
+                phasor[h] = (s0 * dc + c0 * ds, c0 * dc - s0 * ds);
             }
             if variant != 0 {
                 rng ^= rng << 13;

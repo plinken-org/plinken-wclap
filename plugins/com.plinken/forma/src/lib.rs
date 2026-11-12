@@ -32,7 +32,7 @@ static PLUGIN_DEF: PluginDef = PluginDef {
     name: b"FORMA\0",
     vendor: b"Plinken\0",
     url: b"https://plinken.org\0",
-    version: b"0.1.6\0",
+    version: b"0.1.7\0",
     description: b"Two-slot synthesizer: granular and spectral-resynthesis engines built from your own samples.\0",
     features: &[b"instrument\0", b"synthesizer\0", b"sampler\0"],
     audio_inputs: 0,
@@ -675,7 +675,8 @@ mod long_source {
                         p.render(cl, cr);
                     }
                     assert!(l.iter().all(|v| v.is_finite()));
-                    let level = rms(&l[4800..]);
+                    // The slots sit left and right by default: judge the louder side.
+                    let level = rms(&l[4800..]).max(rms(&r[4800..]));
                     assert!(level > 0.03, "rate {host_rate} slot {slot} engine {engine}: rms {level}");
                 }
             }

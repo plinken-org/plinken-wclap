@@ -1776,6 +1776,10 @@ extern "C" fn state_load(plugin_ptr: u32, istream_ptr: u32) -> u32 {
             set(data, id, value);
         }
     }
+    // A UI that is already open got its snapshot before this restore (hosts
+    // open the panel and replay state in either order): send it the values
+    // it should now show. No-op without a webview.
+    push_params_snapshot(plugin_ptr);
     1
 }
 

@@ -106,8 +106,8 @@
 <body>
 <div class="root expanded" id="root">
   <div class="head">
-    <div class="title">FORMA <span class="version">0.1.6</span></div>
-    <div class="out"><div class="voices" id="voices"></div><div class="out-meter" title="Output level"><div id="out-level"></div></div></div>
+    <div class="title">FORMA <span class="version">0.1.7</span></div>
+    <div class="out"><div class="voices" id="voices"></div><div class="out-meter" title="Output level (amber: the limiter is working)"><div id="out-level"></div></div></div>
   </div>
   <div class="body">
     <div class="panel slot" data-slot="0" data-engine="0"></div>
@@ -258,8 +258,8 @@
     position.setValueFromHost = (v) => { posFromHost(v); slots[index].position = v; };
     pot('scan', S.SCAN, { min: -2, max: 2, default: 0, label: 'Scan', format: mult });
     pot('spread', S.SPREAD, { min: 0, max: 1, default: 0.5, label: 'Spread', format: pct });
-    pot('width', S.WIDTH, { min: 0, max: 2, default: index ? 1.5 : 0.25, label: 'Width', format: pct });
-    pot('balance', S.BALANCE, { min: -1, max: 1, default: 0, label: 'Bal', format: bal });
+    pot('width', S.WIDTH, { min: 0, max: 2, default: 1, label: 'Width', format: pct });
+    pot('balance', S.BALANCE, { min: -1, max: 1, default: index ? 0.6 : -0.6, label: 'Bal', format: bal });
     pot('g-rate', S.G_RATE, { min: -8, max: 2, default: 0, label: 'Rate', format: oct });
     pot('g-size', S.G_SIZE, { min: 0.25, max: 16, default: 2, log: true, label: 'Size', format: mult });
     pot('g-shape', S.G_SHAPE, { min: 0, max: 1, default: 0.5, label: 'Shape', format: pct });
@@ -533,7 +533,9 @@
       // dB scale over 48 dB, so quiet output is still visible.
       const db = outPeak > 0 ? 20 * Math.log10(outPeak) : -96;
       el('out-level').style.width = `${Math.max(0, Math.min(1, (db + 48) / 48)) * 100}%`;
-      el('out-level').style.background = outPeak >= 0.98 ? '#c4566d' : '';
+      // The plugin reports the level before its limiter: past the ceiling
+      // means the limiter is holding the output down.
+      el('out-level').style.background = outPeak >= 0.89 ? '#c79b3a' : '';
       outPeak *= 0.9;
     }
     requestAnimationFrame(frame);
