@@ -91,8 +91,20 @@ export function decodeParamsSnapshot(ab) {
   p += 6;
   const head = view.getUint8(p++);
   if ((head & 0xe0) !== 0xa0) return null; // major type 5 (map)
+  // The three map-header forms `crates/wclap-plugin` emits
+  // (`push_cbor_map_header`): count in the header byte, in one byte, or in
+  // two. A plugin with more than 23 params uses the longer forms.
   let count = head & 0x1f;
-  if (count > 23) return null; // We only handle short counts.
+  if (count === 24) {
+    if (view.byteLength < p + 1) return null;
+    count = view.getUint8(p); p += 1;
+  } else if (count === 25) {
+    if (view.byteLength < p + 2) return null;
+    count = view.getUint16(p, false); p += 2;
+  } else if (count > 23) {
+    return null;
+  }
+  if (view.byteLength < p + count * 14) return null;
   const out = new Map();
   for (let i = 0; i < count; i++) {
     if (view.getUint8(p++) !== 0x1a) return null;
