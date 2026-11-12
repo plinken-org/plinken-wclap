@@ -228,6 +228,10 @@ const EVT_NOTE_ON: u16 = 0;
 const EVT_NOTE_OFF: u16 = 1;
 const EVT_NOTE_CHOKE: u16 = 2;
 const EVT_PARAM_VALUE: u16 = 5;
+const EVT_MIDI: u16 = 10;
+/// `clap_event_midi`: header (16), port_index u16, data [u8; 3].
+const EVT_MIDI_DATA_OFFSET: u32 = 18;
+const EVT_MIDI_SIZE: usize = 21;
 
 const PORT_FLAG_IS_MAIN: u32 = 1;
 
@@ -338,6 +342,13 @@ pub trait Plugin: Sized + 'static {
     fn note_choke(&mut self, time: u32, channel: i16, key: i16) {
         self.note_off(time, channel, key, 0.0);
     }
+
+    /// A raw 3-byte MIDI channel message from the host's event queue
+    /// (`CLAP_EVENT_MIDI`): pitch bend, control change, channel pressure.
+    /// Hosts deliver notes as CLAP note events (`note_on`/`note_off`), so
+    /// this is where expression arrives. `msg[0]` is the status byte
+    /// including the channel. Default: ignored.
+    fn midi(&mut self, _time: u32, _msg: [u8; 3]) {}
 
     /// A `webview.receive` payload that isn't one of the scaffold's
     /// built-in shapes ("ready" handshake, `{set:[id,value]}`). Bulk
@@ -704,6 +715,7 @@ struct VTable {
     note_on: Option<fn(*mut (), u32, i16, i16, f64)>,
     note_off: Option<fn(*mut (), u32, i16, i16, f64)>,
     note_choke: Option<fn(*mut (), u32, i16, i16)>,
+    midi: Option<fn(*mut (), u32, [u8; 3])>,
     on_message: Option<fn(*mut (), *const u8, usize) -> bool>,
 }
 
@@ -722,6 +734,7 @@ static mut VTABLE: VTable = VTable {
     note_on: None,
     note_off: None,
     note_choke: None,
+    midi: None,
     on_message: None,
 };
 
@@ -794,6 +807,7 @@ pub fn init_plugin<P: Plugin>(def: &'static PluginDef) {
         VTABLE.note_on = Some(thunk_note_on::<P>);
         VTABLE.note_off = Some(thunk_note_off::<P>);
         VTABLE.note_choke = Some(thunk_note_choke::<P>);
+        VTABLE.midi = Some(thunk_midi::<P>);
         VTABLE.on_message = Some(thunk_on_message::<P>);
 
         // clap.latency is unconditionally exposed; plugins that don't
@@ -882,6 +896,9 @@ fn thunk_note_off<P: Plugin>(p: *mut (), time: u32, channel: i16, key: i16, velo
     unsafe { (*(p as *mut P)).note_off(time, channel, key, velocity) }
 }
 
+fn thunk_midi<P: Plugin>(p: *mut (), time: u32, msg: [u8; 3]) {
+    unsafe { (*(p as *mut P)).midi(time, msg) }
+}
 fn thunk_note_choke<P: Plugin>(p: *mut (), time: u32, channel: i16, key: i16) {
     unsafe { (*(p as *mut P)).note_choke(time, channel, key) }
 }
@@ -1237,7 +1254,17 @@ unsafe fn dispatch_in_events(data: *mut (), list_ptr: u32) {
                     f(data, id, value);
                 }
             }
-            _ => {} // MIDI (10) and anything newer: skipped for now.
+            EVT_MIDI => {
+                if ev_size < EVT_MIDI_SIZE {
+                    continue;
+                }
+                let base = (ev + EVT_MIDI_DATA_OFFSET) as *const u8;
+                let msg = [*base, *base.add(1), *base.add(2)];
+                if let Some(f) = VTABLE.midi {
+                    f(data, time, msg);
+                }
+            }
+            _ => {} // Anything newer: skipped.
         }
     }
 }

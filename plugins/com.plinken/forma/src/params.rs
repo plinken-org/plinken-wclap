@@ -24,7 +24,11 @@ pub const ENV_S: u32 = 8;
 pub const ENV_R: u32 = 9;
 /// How much note velocity scales level (0 = none, 1 = full).
 pub const VEL: u32 = 10;
-pub const GLOBAL_COUNT: usize = 11;
+/// Pitch-bend range in semitones (the wheel's full throw, each way).
+pub const BEND: u32 = 11;
+/// How far the mod wheel moves the read position, as a fraction of the source.
+pub const MOD_POS: u32 = 12;
+pub const GLOBAL_COUNT: usize = 13;
 
 // ---- per-slot offsets -----------------------------------------------------
 pub const SLOT_A: u32 = 100;
@@ -111,6 +115,8 @@ const GLOBALS: [ParamDef; GLOBAL_COUNT] = [
     p(ENV_S, A, "Sustain\0", "Envelope\0", 0.0, 1.0, 0.8),
     p(ENV_R, A, "Release\0", "Envelope\0", 0.001, 8.0, 0.4),
     p(VEL, A, "Velocity\0", "\0", 0.0, 1.0, 0.5),
+    p(BEND, A, "Pitch Bend Range\0", "\0", 0.0, 24.0, 2.0),
+    p(MOD_POS, A, "Mod Wheel to Position\0", "\0", -1.0, 1.0, 0.25),
 ];
 // The two slots open the stereo field between them: A (grain) sits left,
 // B (spectral) right, each at full width.
@@ -166,7 +172,7 @@ mod tests {
             assert!(d.min <= d.default && d.default <= d.max, "id {}", d.id);
             assert_eq!(d.name.last(), Some(&0), "id {} name not NUL-terminated", d.id);
         }
-        assert_eq!(index_of(11), None);
+        assert_eq!(index_of(GLOBAL_COUNT as u32), None);
         assert_eq!(index_of(122), None);
         assert_eq!(index_of(300), None);
     }

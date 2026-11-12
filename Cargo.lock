@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "com-plinken-forma"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "plinken-dsp",
  "plinken-sample-core",

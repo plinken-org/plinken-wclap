@@ -157,6 +157,11 @@ pub struct Engine {
     out_peak: f32,
     /// The Position control per slot, after its glide.
     position: [f32; SLOTS],
+    /// Pitch wheel, -1..1, as last received and after a short glide.
+    bend_target: f32,
+    bend: f32,
+    /// Mod wheel, 0..1.
+    mod_wheel: f32,
     /// Current gain of the output limiter (1 = not limiting).
     limit_gain: f32,
     /// Samples left before the limiter may start to release.
@@ -202,6 +207,9 @@ impl Engine {
             playhead: [0.0; SLOTS],
             out_peak: 0.0,
             position: [0.0; SLOTS],
+            bend_target: 0.0,
+            bend: 0.0,
+            mod_wheel: 0.0,
             limit_gain: 1.0,
             limit_hold: 0,
         };
@@ -242,6 +250,16 @@ impl Engine {
 
     pub fn playhead(&self, slot: usize) -> f32 {
         self.playhead[slot]
+    }
+
+    /// Pitch wheel position from a 14-bit MIDI value (8192 = centre).
+    pub fn set_pitch_bend(&mut self, value14: u16) {
+        self.bend_target = ((value14.min(16383) as f32 - 8192.0) / 8191.0).clamp(-1.0, 1.0);
+    }
+
+    /// Mod wheel position from a 7-bit MIDI value.
+    pub fn set_mod_wheel(&mut self, value7: u8) {
+        self.mod_wheel = value7.min(127) as f32 / 127.0;
     }
 
     /// Output peak since the last call (for the UI's level meter).
@@ -341,10 +359,17 @@ impl Engine {
         self.filt_a1 = 1.0 / (1.0 + self.filt_g * (self.filt_g + self.filt_k));
         self.volume_target = self.values[P::VOLUME as usize];
         let follow = 1.0 - (-(CONTROL_PERIOD as f32) / (POSITION_GLIDE_SECONDS * self.sr)).exp();
+        // The mod wheel pushes the read point along the source, through the
+        // same glide as the Position knob.
+        let wheel = self.mod_wheel * self.values[P::MOD_POS as usize];
         for slot in 0..SLOTS {
-            let target = self.slot_value(slot, P::POSITION);
+            let target = self.slot_value(slot, P::POSITION) + wheel;
             self.position[slot] += (target - self.position[slot]) * follow;
         }
+        // A wheel arrives in steps; a few milliseconds of glide keeps the
+        // pitch from staircasing.
+        let bend_follow = 1.0 - (-(CONTROL_PERIOD as f32) / (0.005 * self.sr)).exp();
+        self.bend += (self.bend_target - self.bend) * bend_follow;
     }
 
     /// Recompute one voice's per-slot control values. `start` is true on
@@ -352,6 +377,7 @@ impl Engine {
     fn refresh_voice(&mut self, index: usize, start: bool) {
         let note = self.voices[index].note as f32;
         let note_pan = self.voices[index].pan;
+        let bend = self.bend * self.values[P::BEND as usize];
         let (a, d, s, r) = (
             self.values[P::ENV_A as usize],
             self.values[P::ENV_D as usize],
@@ -375,7 +401,7 @@ impl Engine {
             let fan = note_pan * val(P::SPREAD) * width.min(1.0);
             let theta = ((val(P::BALANCE) + fan).clamp(-1.0, 1.0) + 1.0) * FRAC_PI_4;
             let place = Placement { mid_l: SQRT_2 * theta.cos(), mid_r: SQRT_2 * theta.sin(), side: width };
-            let note_hz = midi_to_freq(note + val(P::TUNE));
+            let note_hz = midi_to_freq(note + val(P::TUNE) + bend);
             let scan_per_sample = val(P::SCAN) as f64 / (src.seconds() as f64 * self.sr as f64);
 
             let sv = &mut self.voices[index].slots[slot];
@@ -922,6 +948,44 @@ mod tests {
         let (l, _) = render(&mut e, 24_000, 128);
         assert!(l.iter().fold(0.0f32, |p, v| p.max(v.abs())) < LIMIT_CEILING);
         assert_eq!(e.limit_gain, 1.0);
+    }
+
+    #[test]
+    fn the_pitch_wheel_bends_both_engines_by_the_set_range() {
+        for (fade, name) in [(0.0f32, "grain"), (1.0, "spectral")] {
+            for (wheel, range, semitones) in [(16383u16, 2.0f32, 2.0f32), (0, 2.0, -2.0), (16383, 12.0, 12.0), (8192, 12.0, 0.0)] {
+                let mut e = engine();
+                set(&mut e, P::FADE, fade);
+                set(&mut e, P::BEND, range);
+                set(&mut e, P::SLOT_A + P::SPREAD, 0.0);
+                set(&mut e, P::SLOT_B + P::SPREAD, 0.0);
+                e.note_on(57, 1.0);
+                e.set_pitch_bend(wheel);
+                let (l, r) = render(&mut e, 24_000, 128);
+                // The slot sits to one side: read the louder channel.
+                let x = if rms(&l) > rms(&r) { l } else { r };
+                let got = pitch_hz(&x[9600..], 48_000.0);
+                let want = midi_to_freq(57.0 + semitones);
+                let cents = 1200.0 * (got / want).log2();
+                assert!(cents.abs() < 20.0, "{name} wheel {wheel} range {range}: {got} Hz, wanted {want} Hz");
+            }
+        }
+    }
+
+    #[test]
+    fn the_mod_wheel_moves_the_read_position() {
+        let mut e = engine();
+        set(&mut e, P::SLOT_A + P::POSITION, 0.2);
+        set(&mut e, P::MOD_POS, 0.5);
+        e.note_on(60, 1.0);
+        render(&mut e, 24_000, 128);
+        assert!((e.playhead(0) - 0.2).abs() < 0.01);
+        e.set_mod_wheel(127);
+        render(&mut e, 24_000, 128);
+        assert!((e.playhead(0) - 0.7).abs() < 0.01, "wheel up: {}", e.playhead(0));
+        e.set_mod_wheel(0);
+        render(&mut e, 24_000, 128);
+        assert!((e.playhead(0) - 0.2).abs() < 0.01, "wheel down: {}", e.playhead(0));
     }
 
     #[test]

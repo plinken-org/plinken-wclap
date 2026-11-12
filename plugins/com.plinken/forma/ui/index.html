@@ -106,7 +106,7 @@
 <body>
 <div class="root expanded" id="root">
   <div class="head">
-    <div class="title">FORMA <span class="version">0.1.7</span></div>
+    <div class="title">FORMA <span class="version">0.1.8</span></div>
     <div class="out"><div class="voices" id="voices"></div><div class="out-meter" title="Output level (amber: the limiter is working)"><div id="out-level"></div></div></div>
   </div>
   <div class="body">
@@ -123,7 +123,7 @@
         <div id="g-a"></div><div id="g-d"></div><div id="g-s"></div><div id="g-r"></div>
       </div>
       <div class="group-name hide-compact">OUT</div>
-      <div class="pots"><div id="g-vel"></div><div id="g-vol" class="compact-show"></div></div>
+      <div class="pots"><div id="g-bend"></div><div id="g-mod"></div><div id="g-vel"></div><div id="g-vol" class="compact-show"></div></div>
     </div>
     <div class="panel slot" data-slot="1" data-engine="1"></div>
   </div>
@@ -177,7 +177,7 @@
   import { Transport } from '../widgets/transport.mjs';
 
   // Param ids — must match plugins/com.plinken/forma/src/params.rs.
-  const G = { VOLUME: 0, FADE: 1, MIX_MODE: 2, F_CUTOFF: 3, F_RES: 4, F_MODE: 5, ENV_A: 6, ENV_D: 7, ENV_S: 8, ENV_R: 9, VEL: 10 };
+  const G = { VOLUME: 0, FADE: 1, MIX_MODE: 2, F_CUTOFF: 3, F_RES: 4, F_MODE: 5, ENV_A: 6, ENV_D: 7, ENV_S: 8, ENV_R: 9, VEL: 10, BEND: 11, MOD_POS: 12 };
   const SLOT_BASE = [100, 200];
   const S = {
     ENGINE: 0, LEVEL: 1, TUNE: 2, POSITION: 3, SCAN: 4, WIDTH: 5, BALANCE: 6, SPREAD: 7,
@@ -218,6 +218,8 @@
   add(new Pot(el('g-d'), { id: G.ENV_D, min: 0.001, max: 8, default: 0.3, log: true, label: 'D', format: sec }));
   add(new Pot(el('g-s'), { id: G.ENV_S, min: 0, max: 1, default: 0.8, label: 'S', format: pct }));
   add(new Pot(el('g-r'), { id: G.ENV_R, min: 0.001, max: 8, default: 0.4, log: true, label: 'R', format: sec }));
+  add(new Pot(el('g-bend'), { id: G.BEND, min: 0, max: 24, default: 2, label: 'Bend', format: (v) => `±${v.toFixed(0)}st` }));
+  add(new Pot(el('g-mod'), { id: G.MOD_POS, min: -1, max: 1, default: 0.25, label: 'Mod>Pos', format: (v) => `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%` }));
   add(new Pot(el('g-vel'), { id: G.VEL, min: 0, max: 1, default: 0.5, label: 'Vel', format: pct }));
   add(new Pot(el('g-vol'), { id: G.VOLUME, min: 0, max: 1, default: 0.7, label: 'Vol', format: pct }));
 

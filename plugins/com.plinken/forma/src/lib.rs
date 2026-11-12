@@ -32,7 +32,7 @@ static PLUGIN_DEF: PluginDef = PluginDef {
     name: b"FORMA\0",
     vendor: b"Plinken\0",
     url: b"https://plinken.org\0",
-    version: b"0.1.7\0",
+    version: b"0.1.8\0",
     description: b"Two-slot synthesizer: granular and spectral-resynthesis engines built from your own samples.\0",
     features: &[b"instrument\0", b"synthesizer\0", b"sampler\0"],
     audio_inputs: 0,
@@ -261,6 +261,19 @@ impl Plugin for FormaPlugin {
             e.all_notes_off();
         } else if key <= 127 {
             e.note_off(key as u8);
+        }
+    }
+
+    fn midi(&mut self, _time: u32, msg: [u8; 3]) {
+        let Some(e) = &mut self.engine else { return };
+        match (msg[0] & 0xf0, msg[1]) {
+            // Pitch bend: 14 bits, least significant byte first.
+            (0xe0, _) => e.set_pitch_bend(((msg[2] as u16 & 0x7f) << 7) | (msg[1] as u16 & 0x7f)),
+            // Controller 1 is the mod wheel.
+            (0xb0, 1) => e.set_mod_wheel(msg[2]),
+            // All Sound Off / All Notes Off.
+            (0xb0, 120) | (0xb0, 123) => e.all_notes_off(),
+            _ => {}
         }
     }
 
@@ -564,6 +577,25 @@ mod tests {
         assert_eq!(p.get_param(P::SLOT_B + P::TUNE), -24.0);
         p.set_param(9999, 1.0);
         assert_eq!(p.get_param(9999), 0.0);
+    }
+
+    #[test]
+    fn midi_expression_reaches_the_engine() {
+        let mut p = active();
+        p.finish_analysis();
+        p.set_param(P::FADE, 1.0);
+        p.note_on(0, 0, 57, 1.0);
+        let plain = render(&mut p, 9600);
+        // Wheel fully up on channel 3, then a mod wheel move, then panic.
+        p.midi(0, [0xe2, 0x7f, 0x7f]);
+        p.midi(0, [0xb2, 1, 100]);
+        let bent = render(&mut p, 9600);
+        assert!(plain.iter().zip(&bent).any(|(a, b)| (a - b).abs() > 0.01), "wheels had no effect");
+        p.midi(0, [0xb0, 123, 0]);
+        render(&mut p, 48_000);
+        assert_eq!(p.engine.as_ref().unwrap().active_voices(), 0);
+        // Other messages are ignored without harm.
+        p.midi(0, [0xd0, 64, 0]);
     }
 
     #[test]

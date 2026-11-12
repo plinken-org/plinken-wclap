@@ -31,6 +31,9 @@ and are verified in `apps/wclap-host`. See [Not yet built](#not-yet-built).
   120 ms release, channels linked) follows the filter, so a resonant peak
   or a big chord is turned down instead of clipped. The panel's meter
   turns amber while it works.
+- **Wheels:** pitch bend over a settable range (`Bend`, default ±2
+  semitones) and the mod wheel moving the read position of both slots
+  (`Mod>Pos`, default +25 % of the source). Both arrive as MIDI events.
 - 12 voices; retrigger → free → oldest released → oldest.
 
 ## Grain engine (`src/grain.rs`)
