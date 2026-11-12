@@ -32,7 +32,9 @@
   })();
 </script>
 <style>
-  body { overflow: hidden; user-select: none; -webkit-user-select: none; }
+  /* Nothing in the panel scrolls, so no touch should pan or zoom it. */
+  html { touch-action: none; -webkit-text-size-adjust: 100%; }
+  body { overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
   .root { width: 100%; height: 100%; display: grid; }
   .root.expanded { grid-template-rows: auto 1fr; padding: 8px 12px 10px; gap: 8px; }
   .head { display: flex; align-items: baseline; justify-content: space-between; }
@@ -101,7 +103,7 @@
 <body>
 <div class="root expanded" id="root">
   <div class="head">
-    <div class="title">FORMA <span class="version">0.1.1</span></div>
+    <div class="title">FORMA <span class="version">0.1.2</span></div>
     <div class="voices" id="voices"></div>
   </div>
   <div class="body">

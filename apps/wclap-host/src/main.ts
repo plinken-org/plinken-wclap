@@ -1341,7 +1341,21 @@ async function openPluginUi(idx: number, mode: PanelMode = 'expanded'): Promise<
   const iframe = document.createElement('iframe');
   iframe.src = PROXY_PREFIX + uiKey;
   iframe.title = slot.label;
-  iframe.addEventListener('load', () => void reportPanelLoad(idx, iframe, uiKey));
+  iframe.addEventListener('load', () => {
+    // A plugin panel is a control surface too: no pinch or double-tap zoom
+    // from inside it. (Each document has its own touch-action; the page's
+    // rule does not reach into the iframe.) Knobs set their own.
+    try {
+      const root = iframe.contentDocument?.documentElement;
+      // Only where the plugin has not chosen for itself.
+      if (root && iframe.contentWindow?.getComputedStyle(root).touchAction === 'auto') {
+        root.style.touchAction = 'pan-x pan-y';
+      }
+    } catch {
+      // Not readable: leave the plugin's own behaviour.
+    }
+    void reportPanelLoad(idx, iframe, uiKey);
+  });
 
   slot.iframe = iframe;
   iframeBridge?.register(idx, iframe);

@@ -32,7 +32,7 @@ static PLUGIN_DEF: PluginDef = PluginDef {
     name: b"FORMA\0",
     vendor: b"Plinken\0",
     url: b"https://plinken.org\0",
-    version: b"0.1.1\0",
+    version: b"0.1.2\0",
     description: b"Two-slot synthesizer: granular and spectral-resynthesis engines built from your own samples.\0",
     features: &[b"instrument\0", b"synthesizer\0", b"sampler\0"],
     audio_inputs: 0,

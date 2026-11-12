@@ -1006,3 +1006,16 @@ h1 {
 .kbdKey--down.kbdKey--white { background: #8691da; color: #fff; }
 .kbdKey--down.kbdKey--black { background: #925db3; }
 .buildLabel { color: var(--text-dim); }
+
+/* The page is an instrument surface: fingers scroll it, but a pinch or a
+   quick double tap (two notes, two button presses) must not zoom it. */
+html {
+  touch-action: pan-x pan-y;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+/* Safari zooms into a focused field whose text is under 16px. */
+@media (pointer: coarse) {
+  /* !important: this has to win over each field's own class rule. */
+  input, select, textarea { font-size: 16px !important; }
+}
