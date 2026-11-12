@@ -39,24 +39,24 @@
         <div class="sectionHead">
           <h2 class="sectionTitle">Source</h2>
           <p class="sectionSub">
+            Off: nothing feeds the chain &nbsp; &middot; &nbsp;
             Test Tone: 440&nbsp;Hz &minus;10&nbsp;dB &nbsp; &middot; &nbsp;
             Mic: Watch out for feedback
           </p>
         </div>
         <div class="sourceRow">
-          <button
+          <div
             id="sourceToggle"
-            type="button"
             class="sourceToggle"
-            role="switch"
-            aria-checked="false"
-            aria-label="Audio source: Tone or Mic"
+            role="radiogroup"
+            aria-label="Audio source: Off, Tone or Mic"
             data-source="tone"
           >
-            <span class="sourceToggleLabel sourceToggleLabelTone">Tone</span>
-            <span class="sourceToggleLabel sourceToggleLabelMic">Mic</span>
+            <button type="button" class="sourceToggleLabel" role="radio" data-mode="off" aria-checked="false">Off</button>
+            <button type="button" class="sourceToggleLabel" role="radio" data-mode="tone" aria-checked="true">Tone</button>
+            <button type="button" class="sourceToggleLabel" role="radio" data-mode="mic" aria-checked="false">Mic</button>
             <span class="sourceToggleThumb" aria-hidden="true"></span>
-          </button>
+          </div>
           <label id="micDeviceWrap" class="micDeviceWrap" hidden>
             <span class="micDeviceLabel">Device</span>
             <select id="micDevice" class="micDevice"></select>

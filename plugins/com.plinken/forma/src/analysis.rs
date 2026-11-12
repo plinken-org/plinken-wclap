@@ -42,12 +42,29 @@ const NMF_ITERS: usize = 60;
 /// pitch (C3): dense enough to follow the spectral envelope.
 const UNPITCHED_ROOT_HZ: f32 = 130.812_78;
 /// Loudest-frame RMS the resynthesis is normalised to.
-const TARGET_RMS: f32 = 0.2;
+const TARGET_RMS: f32 = 0.25;
+/// Frames per point of a source's level curve.
+const LEVEL_BLOCK: usize = 512;
+/// A source normalises to this peak.
+const SOURCE_PEAK: f32 = 0.9;
 
 /// Mono source audio for one slot, peak-normalised.
 pub struct Source {
     pub sr: f32,
     pub data: Vec<f32>,
+    /// Peak level of each [`LEVEL_BLOCK`] frames (after normalising).
+    pub level: Vec<f32>,
+}
+
+/// Gain that evens out a recording's own dynamics. An oscillator made from
+/// a quiet passage of the source should still be an audible oscillator: a
+/// passage at a fifth of the loudest level plays at about 60 %, not 20 %.
+/// Below 5 % of `reference` the boost stops growing, so silence stays quiet.
+pub fn level_makeup(level: f32, reference: f32) -> f32 {
+    if reference <= 0.0 {
+        return 1.0;
+    }
+    (reference / level.max(0.05 * reference)).powf(0.7)
 }
 
 impl Source {
@@ -80,12 +97,13 @@ impl Source {
             peak = peak.max(v.abs());
         }
         if peak > 1e-6 {
-            let g = 0.9 / peak;
+            let g = SOURCE_PEAK / peak;
             for v in data.iter_mut() {
                 *v *= g;
             }
         }
-        Some(Source { sr, data })
+        let level = data.chunks(LEVEL_BLOCK).map(|c| c.iter().fold(0.0f32, |p, v| p.max(v.abs()))).collect();
+        Some(Source { sr, data, level })
     }
 
     /// Factory source so a fresh instance makes sound before anything is
@@ -124,6 +142,12 @@ impl Source {
 
     pub fn seconds(&self) -> f32 {
         self.data.len() as f32 / self.sr
+    }
+
+    /// Make-up gain for a grain read at `pos` (0..1 of the source).
+    pub fn makeup_at(&self, pos: f32) -> f32 {
+        let i = ((pos - pos.floor()) * self.level.len() as f32) as usize;
+        level_makeup(self.level[i.min(self.level.len() - 1)], SOURCE_PEAK)
     }
 }
 
@@ -725,9 +749,13 @@ impl Analyzer {
         let Some(model) = &mut self.model else { return };
         model.root_hz = self.root_hz;
         model.pitched = self.pitched;
+        let top = model.peaks.iter().fold(0.0f32, |p, v| p.max(*v));
         for k in 0..LAYERS {
             for t in 0..frames {
-                model.env[k * frames + t] = self.h[k * frames + t] * rms[k] * scale;
+                // The envelopes carry the source's timbre over time, with
+                // its loudness swings evened out (see `level_makeup`).
+                let makeup = level_makeup(model.peaks[t], top);
+                model.env[k * frames + t] = self.h[k * frames + t] * rms[k] * scale * makeup;
             }
             // Tables are stored at unit RMS; the envelope carries the level.
             let (n, np) = (rms[k], rms_pure[k]);

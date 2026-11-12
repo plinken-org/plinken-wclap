@@ -173,7 +173,8 @@ const hostReadyPromise = new Promise<void>((r) => (hostReadyResolve = r));
 let masterVolumeSlider: HTMLInputElement | null = null;
 let masterVolumeValueEl: HTMLElement | null = null;
 
-type SourceMode = 'tone' | 'mic';
+/** What feeds the chain's input: nothing, the test tone, or the mic. */
+type SourceMode = 'off' | 'tone' | 'mic';
 type MicChannelMode = 'L' | 'R' | 'MONO' | 'STEREO';
 
 interface BaseGraph {
@@ -216,7 +217,9 @@ const proxyReady = registerPluginProxy();
 
 ui.playBtn.addEventListener('click', () => void onPlay());
 ui.stopBtn.addEventListener('click', () => void onStop());
-ui.sourceToggle.addEventListener('click', () => void onSourceToggle());
+for (const btn of ui.sourceToggle.querySelectorAll<HTMLButtonElement>('[data-mode]')) {
+  btn.addEventListener('click', () => void onSourceToggle(btn.dataset.mode as SourceMode));
+}
 ui.micDevice?.addEventListener('change', () => {
   void ensureMicSource(ui.micDevice.value || undefined).catch((e) => showError(ui, e));
 });
@@ -572,17 +575,19 @@ async function onStop(): Promise<void> {
 
 function statusForRunning(): string {
   const loaded = slots.filter((s) => s.pluginId).length;
+  if (sourceMode === 'off') {
+    return loaded === 0 ? 'Running — no source, no plugin in chain.' : `Running — no source, ${loaded} plugin${loaded === 1 ? '' : 's'} in chain.`;
+  }
   const src = sourceMode === 'mic' ? `mic (${micChannelMode})` : '440 Hz tone';
   if (loaded === 0) return `Playing — ${src} (no plugin in chain).`;
   return `Playing — ${src} through ${loaded} plugin${loaded === 1 ? '' : 's'}.`;
 }
 
 // ---------------------------------------------------------------------------
-// Source toggle (tone ↔ mic) + mic channel router
+// Source switch (off / tone / mic) + mic channel router
 // ---------------------------------------------------------------------------
 
-async function onSourceToggle(): Promise<void> {
-  const next: SourceMode = sourceMode === 'tone' ? 'mic' : 'tone';
+async function onSourceToggle(next: SourceMode): Promise<void> {
   try {
     await setSourceMode(next);
   } catch (err) {
@@ -723,10 +728,15 @@ function refreshSourceGate(): void {
 function updateSourceUi(): void {
   if (!ui.sourceToggle) return;
   ui.sourceToggle.dataset.source = sourceMode;
-  ui.sourceToggle.setAttribute('aria-checked', sourceMode === 'mic' ? 'true' : 'false');
+  for (const btn of ui.sourceToggle.querySelectorAll<HTMLElement>('[data-mode]')) {
+    btn.setAttribute('aria-checked', btn.dataset.mode === sourceMode ? 'true' : 'false');
+  }
   const haveMic = !!baseGraph?.micSource;
-  if (sourceMode === 'tone') {
-    ui.sourceStatus.textContent = 'Tone · 440 Hz';
+  if (sourceMode === 'off') {
+    ui.sourceStatus.textContent = 'Off · no input';
+  } else if (sourceMode === 'tone') {
+    const why = toneMuteReason();
+    ui.sourceStatus.textContent = why ? `Tone muted · ${why}` : 'Tone · 440 Hz';
   } else if (haveMic) {
     ui.sourceStatus.textContent = `Mic · live · ${micChannelMode}`;
   } else {

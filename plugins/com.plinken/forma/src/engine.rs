@@ -24,7 +24,7 @@ const FREE_RATE_HZ: f32 = 130.812_78;
 /// Make-up gain for the ring product of two signals well below full scale.
 const RING_GAIN: f32 = 4.0;
 /// Headroom for a chord before the output soft clip.
-const VOICE_GAIN: f32 = 0.5;
+const VOICE_GAIN: f32 = 0.8;
 
 #[derive(Clone, Copy, PartialEq)]
 enum EngineKind {
@@ -130,6 +130,8 @@ pub struct Engine {
     volume_target: f32,
     /// Playhead (0..1) per slot of the newest sounding voice, for the UI.
     playhead: [f32; SLOTS],
+    /// Largest output sample since the UI last asked.
+    out_peak: f32,
 }
 
 impl Engine {
@@ -168,6 +170,7 @@ impl Engine {
             volume: 0.0,
             volume_target: 0.0,
             playhead: [0.0; SLOTS],
+            out_peak: 0.0,
         };
         e.volume_target = e.values[P::VOLUME as usize];
         e.volume = e.volume_target;
@@ -203,6 +206,11 @@ impl Engine {
 
     pub fn playhead(&self, slot: usize) -> f32 {
         self.playhead[slot]
+    }
+
+    /// Output peak since the last call (for the UI's level meter).
+    pub fn take_peak(&mut self) -> f32 {
+        core::mem::take(&mut self.out_peak)
     }
 
     pub fn active_voices(&self) -> usize {
@@ -357,7 +365,7 @@ impl Engine {
                         scatter,
                         jitter: val(P::G_JITTER),
                         spread: val(P::SPREAD),
-                        gain: level * overlap_gain(size, shape, scatter),
+                        gain: level * overlap_gain(size, shape, scatter) * src.makeup_at(pos),
                     })
                 }
                 EngineKind::Spectral => match content.model.as_ref() {
@@ -457,6 +465,7 @@ impl Engine {
             self.volume += (self.volume_target - self.volume) * 0.002;
             out_l[i] = soft_clip(out_l[i] * self.volume);
             out_r[i] = soft_clip(out_r[i] * self.volume);
+            self.out_peak = self.out_peak.max(out_l[i].abs()).max(out_r[i].abs());
         }
     }
 }

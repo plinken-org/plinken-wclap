@@ -27,7 +27,7 @@ export interface UiElements {
   midiNotes: HTMLElement;
   midiPanic: HTMLButtonElement;
   midiRescan: HTMLButtonElement;
-  sourceToggle: HTMLButtonElement;
+  sourceToggle: HTMLElement;
   sourceStatus: HTMLElement;
   micDeviceWrap: HTMLElement;
   micDevice: HTMLSelectElement;
@@ -53,7 +53,7 @@ export function getElements(): UiElements {
     midiNotes: el<HTMLElement>('midiNotes'),
     midiPanic: el<HTMLButtonElement>('midiPanic'),
     midiRescan: el<HTMLButtonElement>('midiRescan'),
-    sourceToggle: el<HTMLButtonElement>('sourceToggle'),
+    sourceToggle: el<HTMLElement>('sourceToggle'),
     sourceStatus: el<HTMLElement>('sourceStatus'),
     micDeviceWrap: el<HTMLElement>('micDeviceWrap'),
     micDevice: document.getElementById('micDevice') as unknown as HTMLSelectElement,

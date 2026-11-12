@@ -3,7 +3,7 @@
   "id": "com.plinken.forma",
   "name": "FORMA",
   "vendor": "Plinken",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Two-slot synthesizer: each slot is a granular or a spectral-resynthesis engine built from your own sample, blended by fade or ring modulation.",
   "features": ["instrument", "synthesizer", "sampler"],
   "license": "MIT",

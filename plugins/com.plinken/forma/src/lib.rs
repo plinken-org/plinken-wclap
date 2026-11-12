@@ -32,7 +32,7 @@ static PLUGIN_DEF: PluginDef = PluginDef {
     name: b"FORMA\0",
     vendor: b"Plinken\0",
     url: b"https://plinken.org\0",
-    version: b"0.1.2\0",
+    version: b"0.1.3\0",
     description: b"Two-slot synthesizer: granular and spectral-resynthesis engines built from your own samples.\0",
     features: &[b"instrument\0", b"synthesizer\0", b"sampler\0"],
     audio_inputs: 0,
@@ -191,7 +191,7 @@ impl FormaPlugin {
         Self::wrap(&p)
     }
 
-    fn tick_message(&self) -> Vec<u8> {
+    fn tick_message(&mut self) -> Vec<u8> {
         let mut p = vec![MSG_TICK];
         for i in 0..SLOTS {
             let pos = self.engine.as_ref().map(|e| e.playhead(i)).unwrap_or(0.0);
@@ -201,6 +201,10 @@ impl FormaPlugin {
         for slot in &self.slots {
             p.push(slot.analyzer.as_ref().map(|a| (a.progress() * 100.0) as u8).unwrap_or(100));
         }
+        // Output peak since the last tick: tells "the synth is silent" from
+        // "the synth plays but nothing reaches the speakers".
+        let peak = self.engine.as_mut().map(|e| e.take_peak()).unwrap_or(0.0);
+        p.push((peak.min(1.0) * 255.0).ceil() as u8);
         Self::wrap(&p)
     }
 }
@@ -359,7 +363,8 @@ impl Plugin for FormaPlugin {
         self.ui_countdown -= frames as f32 / self.sample_rate;
         if self.ui_countdown <= 0.0 {
             self.ui_countdown = UI_TICK_SECONDS;
-            ctx.send_to_ui(&self.tick_message());
+            let tick = self.tick_message();
+            ctx.send_to_ui(&tick);
         }
         ProcessStatus::Continue
     }
@@ -529,7 +534,7 @@ mod tests {
         assert!(o[23..].iter().any(|v| *v > 0));
         let t = p.tick_message();
         assert_eq!(t[10], MSG_TICK);
-        assert_eq!(t.len(), 10 + 6);
+        assert_eq!(t.len(), 10 + 7);
     }
 }
 
@@ -576,5 +581,70 @@ mod cost {
         }
         let per = t.elapsed().as_secs_f64() / blocks as f64;
         println!("render: {} voices, {:.0} us per 128-frame block ({:.1}% of real time)", engine::VOICES, per * 1e6, per / (128.0 / 48_000.0) * 100.0);
+    }
+}
+
+#[cfg(test)]
+mod long_source {
+    use super::*;
+
+    fn rms(x: &[f32]) -> f32 {
+        (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt()
+    }
+
+    /// The longest source the plugin keeps, with a quiet start and music-like
+    /// level changes, at the sample rates hosts actually run at: both engines
+    /// must be clearly audible in both slots at the default settings.
+    #[test]
+    fn a_long_imported_source_is_audible_in_both_engines_at_common_rates() {
+        let sr_src = 44_100.0f32;
+        let n = (sr_src * 20.0) as usize;
+        // 1.5 s of near silence, then chords that swell every two seconds.
+        let pcm: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / sr_src;
+                if t < 1.5 {
+                    return 0.0005 * (t * 900.0).sin();
+                }
+                let swell = 0.2 + 0.8 * (0.5 - 0.5 * (core::f32::consts::TAU * t / 2.0).cos());
+                let ph = core::f32::consts::TAU * t;
+                swell * ((ph * 196.0).sin() + 0.6 * (ph * 247.0).sin() + 0.4 * (ph * 294.0).sin() + 0.2 * (ph * 1175.0).sin())
+            })
+            .collect();
+        for host_rate in [44_100.0f64, 48_000.0] {
+            for slot in 0..2u32 {
+                for engine in [0.0f64, 1.0] {
+                    let mut p = FormaPlugin::new();
+                    p.activate(host_rate, 128);
+                    assert!(p.on_message(&plsp_mono(slot, sr_src as u32, &pcm)));
+                    p.finish_analysis();
+                    let base = if slot == 0 { params::SLOT_A } else { params::SLOT_B };
+                    p.set_param(base + params::ENGINE, engine);
+                    // This slot alone.
+                    p.set_param(params::FADE, slot as f64);
+                    p.note_on(0, 0, 60, 0.8);
+                    let (mut l, mut r) = (vec![0.0f32; 24_000], vec![0.0f32; 24_000]);
+                    for (cl, cr) in l.chunks_mut(128).zip(r.chunks_mut(128)) {
+                        p.render(cl, cr);
+                    }
+                    assert!(l.iter().all(|v| v.is_finite()));
+                    let level = rms(&l[4800..]);
+                    assert!(level > 0.03, "rate {host_rate} slot {slot} engine {engine}: rms {level}");
+                }
+            }
+        }
+    }
+
+    fn plsp_mono(slot: u32, sr: u32, pcm: &[f32]) -> Vec<u8> {
+        let payload = 32 + pcm.len() * 4;
+        let mut m = vec![0xa1, 0x63, b's', b'm', b'p', 0x5a];
+        m.extend_from_slice(&(payload as u32).to_be_bytes());
+        for v in [0x504c_5350u32, 1, slot, sr, 1, pcm.len() as u32, 0, pcm.len() as u32] {
+            m.extend_from_slice(&v.to_le_bytes());
+        }
+        for v in pcm {
+            m.extend_from_slice(&v.to_le_bytes());
+        }
+        m
     }
 }

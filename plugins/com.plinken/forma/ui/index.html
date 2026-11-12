@@ -40,6 +40,9 @@
   .head { display: flex; align-items: baseline; justify-content: space-between; }
   .title { font-family: var(--font-display); font-size: 0.82rem; letter-spacing: 0.32em; color: var(--text); }
   .title .version { font-family: var(--font-mono); font-size: 0.58rem; letter-spacing: 0.04em; color: var(--text-dim); }
+  .out { display: flex; align-items: center; gap: 8px; }
+  .out-meter { width: 90px; height: 5px; background: var(--bg-deep); border: 1px solid var(--border-soft); border-radius: 3px; overflow: hidden; }
+  #out-level { height: 100%; width: 0; background: var(--accent); }
   .voices { font-family: var(--font-mono); font-size: 0.62rem; color: var(--text-dim); }
   .body { display: grid; grid-template-columns: 1fr 212px 1fr; gap: 10px; min-height: 0; }
   .panel {
@@ -103,8 +106,8 @@
 <body>
 <div class="root expanded" id="root">
   <div class="head">
-    <div class="title">FORMA <span class="version">0.1.2</span></div>
-    <div class="voices" id="voices"></div>
+    <div class="title">FORMA <span class="version">0.1.3</span></div>
+    <div class="out"><div class="voices" id="voices"></div><div class="out-meter" title="Output level"><div id="out-level"></div></div></div>
   </div>
   <div class="body">
     <div class="panel slot" data-slot="0" data-engine="0"></div>
@@ -226,6 +229,8 @@
     playhead: 0, position: 0.1, busy: '',
   }));
   let activeVoices = 0;
+  // Output peak (0..1) from the plugin's tick, with a falling hold for display.
+  let outPeak = 0;
   // Host price for generated sound, when the host offers generation.
   let plinsPerSecond = null;
   const costUpdaters = [];
@@ -420,6 +425,7 @@
         activeVoices = p[3];
         slots[0].progress = p[4];
         slots[1].progress = p[5];
+        if (p.length >= 7) outPeak = Math.max(outPeak, p[6] / 255);
       }
       return;
     }
@@ -524,6 +530,11 @@
       slotEls.forEach((panel, i) => drawIris(panel, slots[i], i));
       const v = activeVoices ? `${activeVoices} voice${activeVoices === 1 ? '' : 's'}` : '';
       if (el('voices').textContent !== v) el('voices').textContent = v;
+      // dB scale over 48 dB, so quiet output is still visible.
+      const db = outPeak > 0 ? 20 * Math.log10(outPeak) : -96;
+      el('out-level').style.width = `${Math.max(0, Math.min(1, (db + 48) / 48)) * 100}%`;
+      el('out-level').style.background = outPeak >= 0.98 ? '#c4566d' : '';
+      outPeak *= 0.9;
     }
     requestAnimationFrame(frame);
   }
