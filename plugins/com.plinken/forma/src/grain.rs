@@ -42,6 +42,11 @@ pub struct GrainParams {
     pub jitter: f32,
     pub spread: f32,
     pub gain: f32,
+    /// One cycle of the source at its detected pitch, in source frames, or
+    /// 0 when the source has no clear pitch. Grains then start a whole
+    /// number of cycles apart, so neighbouring grains line up in phase and
+    /// add instead of beating against each other while the position moves.
+    pub period: f32,
 }
 
 #[derive(Clone)]
@@ -81,7 +86,11 @@ impl GrainVoice {
         let dur = (p.size / p.rate).max(MIN_GRAIN_SAMPLES);
         let scatter = if p.scatter > 0.0 { p.scatter * (self.rand() - 0.5) } else { 0.0 };
         let pan = if p.spread > 0.0 { p.spread * (self.rand() * 2.0 - 1.0) } else { 0.0 };
-        let start = (p.pos + scatter).rem_euclid(1.0) as f64 * len;
+        let mut start = (p.pos + scatter).rem_euclid(1.0) as f64 * len;
+        if p.period >= 2.0 {
+            let period = p.period as f64;
+            start = (start / period).round() * period;
+        }
         let theta = (pan + 1.0) * core::f32::consts::FRAC_PI_4;
         let g = &mut self.grains[slot];
         g.active = true;
@@ -168,7 +177,7 @@ mod tests {
     use super::*;
 
     fn params(rate: f32) -> GrainParams {
-        GrainParams { rate, size: 2.0, shape: 0.5, speed: 1.0, pos: 0.25, scatter: 0.0, jitter: 0.0, spread: 0.0, gain: 1.0 }
+        GrainParams { rate, size: 2.0, shape: 0.5, speed: 1.0, pos: 0.25, scatter: 0.0, jitter: 0.0, spread: 0.0, gain: 1.0, period: 0.0 }
     }
 
     fn source() -> Vec<f32> {

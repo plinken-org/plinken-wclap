@@ -47,6 +47,11 @@ const TARGET_RMS: f32 = 0.25;
 const LEVEL_BLOCK: usize = 512;
 /// A source normalises to this peak.
 const SOURCE_PEAK: f32 = 0.9;
+/// Neighbourhood of the source level curve, in blocks each side (≈ 85 ms
+/// at 48 kHz).
+const LEVEL_SMOOTH_BLOCKS: usize = 8;
+/// The same for the spectral model, in analysis frames each side.
+const LEVEL_SMOOTH_FRAMES: usize = 3;
 
 /// Mono source audio for one slot, peak-normalised.
 pub struct Source {
@@ -54,6 +59,21 @@ pub struct Source {
     pub data: Vec<f32>,
     /// Peak level of each [`LEVEL_BLOCK`] frames (after normalising).
     pub level: Vec<f32>,
+}
+
+/// A level curve the make-up gain can follow without pumping: each point
+/// becomes the loudest of its neighbourhood (`radius` points each side, the
+/// curve treated as a loop), then the result is averaged over the same
+/// span. Individual transients no longer swing the gain point to point.
+pub fn smooth_level(peaks: &[f32], radius: usize) -> Vec<f32> {
+    let n = peaks.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let radius = radius.min((n - 1) / 2);
+    let around = |i: usize, d: usize| (i + n + d - radius) % n;
+    let held: Vec<f32> = (0..n).map(|i| (0..=2 * radius).map(|d| peaks[around(i, d)]).fold(0.0f32, f32::max)).collect();
+    (0..n).map(|i| (0..=2 * radius).map(|d| held[around(i, d)]).sum::<f32>() / (2 * radius + 1) as f32).collect()
 }
 
 /// Gain that evens out a recording's own dynamics. An oscillator made from
@@ -102,8 +122,8 @@ impl Source {
                 *v *= g;
             }
         }
-        let level = data.chunks(LEVEL_BLOCK).map(|c| c.iter().fold(0.0f32, |p, v| p.max(v.abs()))).collect();
-        Some(Source { sr, data, level })
+        let peaks: Vec<f32> = data.chunks(LEVEL_BLOCK).map(|c| c.iter().fold(0.0f32, |p, v| p.max(v.abs()))).collect();
+        Some(Source { sr, data, level: smooth_level(&peaks, LEVEL_SMOOTH_BLOCKS) })
     }
 
     /// Factory source so a fresh instance makes sound before anything is
@@ -146,8 +166,12 @@ impl Source {
 
     /// Make-up gain for a grain read at `pos` (0..1 of the source).
     pub fn makeup_at(&self, pos: f32) -> f32 {
-        let i = ((pos - pos.floor()) * self.level.len() as f32) as usize;
-        level_makeup(self.level[i.min(self.level.len() - 1)], SOURCE_PEAK)
+        let n = self.level.len();
+        let x = (pos - pos.floor()) * n as f32;
+        let i = (x as usize).min(n - 1);
+        let j = if i + 1 >= n { 0 } else { i + 1 };
+        let level = self.level[i] + (self.level[j] - self.level[i]) * (x - i as f32);
+        level_makeup(level, SOURCE_PEAK)
     }
 }
 
@@ -749,12 +773,14 @@ impl Analyzer {
         let Some(model) = &mut self.model else { return };
         model.root_hz = self.root_hz;
         model.pitched = self.pitched;
-        let top = model.peaks.iter().fold(0.0f32, |p, v| p.max(*v));
+        // Not allocation-free, but this unit runs once per import.
+        let level = smooth_level(&model.peaks, LEVEL_SMOOTH_FRAMES);
+        let top = level.iter().fold(0.0f32, |p, v| p.max(*v));
         for k in 0..LAYERS {
             for t in 0..frames {
                 // The envelopes carry the source's timbre over time, with
                 // its loudness swings evened out (see `level_makeup`).
-                let makeup = level_makeup(model.peaks[t], top);
+                let makeup = level_makeup(level[t], top);
                 model.env[k * frames + t] = self.h[k * frames + t] * rms[k] * scale * makeup;
             }
             // Tables are stored at unit RMS; the envelope carries the level.

@@ -36,6 +36,10 @@ oscillator: **rate sets the pitch, Size and Pitch set the timbre**. Onsets
 are sub-sample accurate. With key tracking off the rate is relative to C3
 and reaches down to slow, audible grains.
 
+For a source with a clear pitch, grains start a whole number of source
+cycles apart, so neighbouring grains line up in phase: moving `Position` or
+`Scan` then changes the timbre smoothly instead of roughening it.
+
 `Size` (grain length in grain periods), `Shape` (window roundness),
 `Pitch` (grain playback speed), `Scatter` (random read position),
 `Jitter` (random timing — turns a tone into a cloud), `Pitch follows key`
@@ -69,7 +73,9 @@ it never blocks the audio thread: a 20 s source takes about 2200 units
 engine plays a new source immediately; a Spectral slot is silent until its
 model lands.
 
-`Position` and `Scan` are shared by both engines, so switching a slot's
+`Position` glides to a new value over about 60 ms (a knob arrives as a
+stream of small jumps), and both engines even out the source's own
+loudness along its length. `Position` and `Scan` are shared by both engines, so switching a slot's
 engine keeps its place in the source.
 
 ## Sources

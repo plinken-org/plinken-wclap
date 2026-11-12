@@ -19,6 +19,12 @@ pub const SLOTS: usize = 2;
 /// Control values are refreshed every this many samples, counted across
 /// blocks so the result does not depend on the host's block size.
 const CONTROL_PERIOD: usize = 32;
+/// Time the read position takes to follow the Position control. A knob
+/// arrives as a few dozen jumps a second; reading the source from a new
+/// place on each one is heard as a rattle, so the position glides.
+const POSITION_GLIDE_SECONDS: f32 = 0.06;
+/// Time the spectral layer gains take to follow the envelopes.
+const LAYER_GLIDE_SECONDS: f32 = 0.004;
 /// Reference pitch for grain rate with key tracking off (C3).
 const FREE_RATE_HZ: f32 = 130.812_78;
 /// Make-up gain for the ring product of two signals well below full scale.
@@ -132,6 +138,8 @@ pub struct Engine {
     playhead: [f32; SLOTS],
     /// Largest output sample since the UI last asked.
     out_peak: f32,
+    /// The Position control per slot, after its glide.
+    position: [f32; SLOTS],
 }
 
 impl Engine {
@@ -171,7 +179,11 @@ impl Engine {
             volume_target: 0.0,
             playhead: [0.0; SLOTS],
             out_peak: 0.0,
+            position: [0.0; SLOTS],
         };
+        for slot in 0..SLOTS {
+            e.position[slot] = e.slot_value(slot, P::POSITION);
+        }
         e.volume_target = e.values[P::VOLUME as usize];
         e.volume = e.volume_target;
         e
@@ -311,6 +323,11 @@ impl Engine {
         self.filt_k = 2.0 - 1.96 * self.values[P::F_RES as usize].clamp(0.0, 1.0);
         self.filt_a1 = 1.0 / (1.0 + self.filt_g * (self.filt_g + self.filt_k));
         self.volume_target = self.values[P::VOLUME as usize];
+        let follow = 1.0 - (-(CONTROL_PERIOD as f32) / (POSITION_GLIDE_SECONDS * self.sr)).exp();
+        for slot in 0..SLOTS {
+            let target = self.slot_value(slot, P::POSITION);
+            self.position[slot] += (target - self.position[slot]) * follow;
+        }
     }
 
     /// Recompute one voice's per-slot control values. `start` is true on
@@ -341,7 +358,7 @@ impl Engine {
                 sv.scan += scan_per_sample * CONTROL_PERIOD as f64;
                 sv.scan -= sv.scan.floor();
             }
-            let pos = (val(P::POSITION) + sv.scan as f32).rem_euclid(1.0);
+            let pos = (self.position[slot] + sv.scan as f32).rem_euclid(1.0);
             let switched = sv.kind != Some(kind);
             sv.kind = Some(kind);
 
@@ -366,6 +383,10 @@ impl Engine {
                         jitter: val(P::G_JITTER),
                         spread: val(P::SPREAD),
                         gain: level * overlap_gain(size, shape, scatter) * src.makeup_at(pos),
+                        period: match content.model.as_ref() {
+                            Some(m) if m.pitched => src.sr / m.root_hz,
+                            _ => 0.0,
+                        },
                     })
                 }
                 EngineKind::Spectral => match content.model.as_ref() {
@@ -388,8 +409,7 @@ impl Engine {
                             fm: val(P::S_FM),
                             ratio: val(P::S_RATIO),
                             spread: val(P::SPREAD),
-                            // Reach the new envelope point within one control period.
-                            glide: 3.0 / CONTROL_PERIOD as f32,
+                            glide: 1.0 - (-1.0 / (LAYER_GLIDE_SECONDS * self.sr)).exp(),
                         })
                     }
                 },
@@ -684,6 +704,76 @@ mod tests {
             let (l, r) = render(&mut e, 24_000, 128);
             assert!(l.iter().chain(r.iter()).all(|v| v.is_finite() && v.abs() <= 1.0), "hi={hi}");
         }
+    }
+
+    /// A music-like source: level and brightness change along its length.
+    fn varied_engine() -> Engine {
+        let sr = 48_000.0f32;
+        let n = (sr * 6.0) as usize;
+        let data: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / sr;
+                let swell = 0.15 + 0.85 * (0.5 - 0.5 * (core::f32::consts::TAU * t / 1.3).cos());
+                let bright = 0.5 - 0.5 * (core::f32::consts::TAU * t / 2.1).cos();
+                let ph = core::f32::consts::TAU * 196.0 * t;
+                swell * (1..=24).map(|h| (ph * h as f32).sin() / (h as f32).powf(2.0 - 1.5 * bright)).sum::<f32>()
+            })
+            .collect();
+        let mut e = Engine::new(48_000.0);
+        for slot in 0..SLOTS {
+            let source = Arc::new(Source::from_mono(sr, data.clone()).unwrap());
+            let model = analyze_blocking(source.clone());
+            let root_hz = model.root_hz;
+            e.set_content(slot, SlotContent { source: Some(source), model: Some(Arc::new(model)), root_hz });
+        }
+        e
+    }
+
+    /// Turning the Position knob arrives as a stream of small jumps (one per
+    /// UI message, ~60 a second) while the read point crosses a source whose
+    /// level and timbre keep changing. The sound must glide through it: the
+    /// level of one cycle of the note may not differ from the next by more
+    /// than a fifth of the average. (Before the position glide and phase-
+    /// locked grains this was 30 % for Spectral and 70–100 % for Grain.)
+    #[test]
+    fn sweeping_position_is_smooth_from_cycle_to_cycle() {
+        for (engine_kind, name) in [(1.0f32, "spectral"), (0.0, "grain")] {
+            let mut e = varied_engine();
+            set(&mut e, P::FADE, 0.0);
+            set(&mut e, P::SLOT_A + P::ENGINE, engine_kind);
+            set(&mut e, P::SLOT_A + P::SPREAD, 0.0);
+            set(&mut e, P::SLOT_A + P::POSITION, 0.1);
+            e.note_on(55, 1.0);
+            render(&mut e, 4800, 128);
+            // One second, 60 knob messages, across three quarters of the source.
+            let mut swept = Vec::new();
+            for step in 0..60 {
+                set(&mut e, P::SLOT_A + P::POSITION, 0.1 + 0.75 * (step + 1) as f32 / 60.0);
+                swept.extend(render(&mut e, 800, 128).0);
+            }
+            assert!(swept.iter().all(|v| v.is_finite()));
+            // G3 is 245 samples a cycle at 48 kHz.
+            let levels: Vec<f32> = swept.chunks_exact(245).map(rms).collect();
+            let mean = levels.iter().sum::<f32>() / levels.len() as f32;
+            let jump = levels.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
+            assert!(mean > 0.02, "{name}: too quiet to judge ({mean})");
+            assert!(jump < 0.2 * mean, "{name}: level jumps {:.0} % between cycles", 100.0 * jump / mean);
+        }
+    }
+
+    #[test]
+    fn position_follows_its_control_gradually() {
+        let mut e = engine();
+        set(&mut e, P::FADE, 0.0);
+        e.note_on(60, 1.0);
+        render(&mut e, 4800, 128);
+        let before = e.playhead(0);
+        set(&mut e, P::SLOT_A + P::POSITION, 0.9);
+        render(&mut e, 128, 128);
+        let soon = e.playhead(0);
+        assert!(soon > before && soon < 0.3, "after one block the read point is at {soon}");
+        render(&mut e, 24_000, 128);
+        assert!((e.playhead(0) - 0.9).abs() < 0.01, "after half a second it is at {}", e.playhead(0));
     }
 
     #[test]
