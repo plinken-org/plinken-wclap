@@ -21,6 +21,7 @@ import workletUrl from './wclap-runtime/chain-worklet.mjs?worker&url';
 import { fetchWclap, type WclapManifest } from './plugin-loader';
 import { IframeBridge } from './iframe-bridge';
 import { mountKeyboard } from './keyboard';
+import { BUNDLE_UI_PREFIX, encodeBundleUrl } from '../worker/bundle-ui.js';
 import {
   getElements,
   setStatus,
@@ -43,6 +44,50 @@ import {
 const NUM_SLOTS = 5;
 const SHELF_DT_TYPE = 'application/x-plinken-shelf-id';
 const PROXY_PREFIX = '/plugin-proxy';
+/** Stop Safari zooming a document on a pinch or a quick second tap. CSS
+ *  `touch-action` is the standard way and is set as well, but Safari on
+ *  iPad still zoomed; these are its own gesture events, and the classic
+ *  double-tap guard. Taps on controls are left alone so a fast second
+ *  press of a button still counts. */
+/** Whether a tap on `el` does something: a form control, or anything the
+ *  page marks as clickable (the rack's slot names are plain spans). Cancelling
+ *  the touch there would swallow the click along with the zoom. */
+function isTapTarget(el: Element | null, doc: Document): boolean {
+  if (!el?.closest) return false;
+  if (el.closest('button, a, input, select, textarea, label, [role="switch"], [role="button"]')) return true;
+  const view = doc.defaultView;
+  for (let node: Element | null = el; node && view; node = node.parentElement) {
+    if (view.getComputedStyle(node).cursor === 'pointer') return true;
+  }
+  return false;
+}
+
+function guardZoom(doc: Document): void {
+  for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+    doc.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+  }
+  let lastTouchEnd = 0;
+  doc.addEventListener(
+    'touchend',
+    (e) => {
+      const now = Date.now();
+      const quick = now - lastTouchEnd < 350;
+      lastTouchEnd = now;
+      if (quick && !isTapTarget(e.target as Element | null, doc)) e.preventDefault();
+    },
+    { passive: false }
+  );
+  // Two fingers moving is a pinch: refuse it before Safari starts zooming.
+  doc.addEventListener(
+    'touchmove',
+    (e) => {
+      if (e.touches.length > 1 && !(e.target as Element | null)?.closest?.('.kbdKeys')) e.preventDefault();
+    },
+    { passive: false }
+  );
+}
+guardZoom(document);
+
 /** Cache Storage bucket the proxy SW serves plugin UI files from. Must
  *  match `CACHE_NAME` in public/plugin-proxy-sw.js. */
 const PROXY_CACHE = 'plugin-proxy-files';
@@ -549,11 +594,8 @@ async function setSourceMode(mode: SourceMode): Promise<void> {
   }
 
   sourceMode = mode;
-  if (baseGraph) {
-    baseGraph.toneGain.gain.value = mode === 'tone' ? TONE_LEVEL_GAIN : 0;
-    baseGraph.micGain.gain.value = mode === 'mic' ? 1 : 0;
-  }
   updateSourceUi();
+  refreshSourceGate();
   if (baseGraph && baseGraph.ctx.state === 'running') {
     setStatus(ui, statusForRunning());
   }
@@ -629,6 +671,30 @@ async function populateMicDevices(): Promise<void> {
     select.appendChild(opt);
   }
   select.value = current;
+}
+
+/** An instrument makes its own sound and ignores its input, but only once
+ *  it is loaded and only if it is first: the tone would be heard while it
+ *  loads and through any slot ahead of it. With an instrument anywhere in
+ *  the rack the test tone is muted; effects after it process the instrument. */
+function rackHasInstrument(): boolean {
+  return slots.some((slot) => {
+    if (!slot.pluginId || slot.bypass) return false;
+    const m = slot.manifest as { features?: unknown; plugins?: Array<{ id?: string; features?: unknown }> } | null;
+    const own = m?.plugins?.find((p) => p.id === slot.pluginId)?.features ?? m?.features;
+    return Array.isArray(own) && own.includes('instrument');
+  });
+}
+
+function refreshSourceGate(): void {
+  const toneMuted = sourceMode === 'tone' && rackHasInstrument();
+  if (baseGraph) {
+    baseGraph.toneGain.gain.value = sourceMode === 'tone' && !toneMuted ? TONE_LEVEL_GAIN : 0;
+    baseGraph.micGain.gain.value = sourceMode === 'mic' ? 1 : 0;
+  }
+  if (sourceMode === 'tone') {
+    ui.sourceStatus.textContent = toneMuted ? 'Tone muted · instrument in the rack' : 'Tone · 440 Hz';
+  }
 }
 
 function updateSourceUi(): void {
@@ -885,6 +951,8 @@ function firstEmptySlot(): number {
 // ---------------------------------------------------------------------------
 
 function renderRack(): void {
+  // Every change to the rack (load, unload, bypass) passes through here.
+  refreshSourceGate();
   ui.rack.innerHTML = '';
   slots.forEach((slot, idx) => {
     const occupied = !!slot.pluginId;
@@ -1281,7 +1349,7 @@ const proxyResolvers = new Map<number, (p: string) => Promise<ArrayBuffer | null
 type PanelMode = 'expanded' | 'compact';
 
 async function openPluginUi(idx: number, mode: PanelMode = 'expanded'): Promise<void> {
-  await proxyReady;
+  const proxy = await proxyReady;
   const slot = slots[idx];
   if (!slot.pluginId || !slot.files) return;
   // If a panel for this slot is already open, swap modes if the user asked
@@ -1338,14 +1406,32 @@ async function openPluginUi(idx: number, mode: PanelMode = 'expanded'): Promise<
   // Safari that message relay left every panel blank.
   await cachePluginFiles(files, pluginPath, uiKey);
 
+  // Without a working service worker the files are fetched from the server
+  // instead, which unpacks them from the bundle (worker/bundle-ui.js). That
+  // needs a bundle the server can reach: not one dropped from disk.
+  let src = PROXY_PREFIX + uiKey;
+  if (!proxy.ok) {
+    const inBundle = uiPathInBundle(uiKey, pluginPath);
+    if (!slot.url || slot.url.startsWith('blob:') || !inBundle) {
+      showError(
+        ui,
+        `Slot ${idx + 1}: this browser cannot show the plugin's UI (${proxy.reason}). ` +
+          'Plugins from the shelf still can; a file dropped from disk cannot.'
+      );
+      return;
+    }
+    src = `${BUNDLE_UI_PREFIX}${encodeBundleUrl(slot.url)}/${inBundle}`;
+  }
+
   const iframe = document.createElement('iframe');
-  iframe.src = PROXY_PREFIX + uiKey;
+  iframe.src = src;
   iframe.title = slot.label;
   iframe.addEventListener('load', () => {
     // A plugin panel is a control surface too: no pinch or double-tap zoom
     // from inside it. (Each document has its own touch-action; the page's
     // rule does not reach into the iframe.) Knobs set their own.
     try {
+      if (iframe.contentDocument) guardZoom(iframe.contentDocument);
       const root = iframe.contentDocument?.documentElement;
       // Only where the plugin has not chosen for itself.
       if (root && iframe.contentWindow?.getComputedStyle(root).touchAction === 'auto') {
@@ -1366,6 +1452,14 @@ async function openPluginUi(idx: number, mode: PanelMode = 'expanded'): Promise<
   openPanels.set(idx, panel);
   positionPanel(panel);
   wirePanelDrag(panel);
+}
+
+/** The UI entry file's path inside the bundle (`ui/index.html`), from the
+ *  host-side key (`/plugin/<hash>/ui/index.html`). */
+function uiPathInBundle(uiKey: string, pluginPath: string): string | null {
+  if (pluginPath && uiKey.startsWith(pluginPath + '/')) return uiKey.slice(pluginPath.length + 1);
+  const m = /^\/plugin\/[^/]+\/(.+)$/.exec(uiKey);
+  return m ? m[1] : null;
 }
 
 /** Every request path the iframe may use for bundle file `key` — the same
@@ -1419,7 +1513,8 @@ async function reportPanelLoad(idx: number, iframe: HTMLIFrameElement, uiKey: st
   try {
     const doc = iframe.contentDocument;
     const text = (doc?.body?.textContent ?? '').trim();
-    if (doc && !text.startsWith('plugin-proxy:') && (doc.body?.children.length ?? 0) > 0) {
+    const refused = text.startsWith('plugin-proxy:') || text.startsWith('bundle-ui:');
+    if (doc && !refused && (doc.body?.children.length ?? 0) > 0) {
       void reportSilentPanel(idx, iframe);
       return;
     }
@@ -1434,7 +1529,8 @@ async function reportPanelLoad(idx: number, iframe: HTMLIFrameElement, uiKey: st
     const hit = await caches.open(PROXY_CACHE).then((c) => c.match(PROXY_PREFIX + uiKey)).catch(() => undefined);
     cached = hit ? 'file cached' : 'file not cached';
   }
-  showError(ui, `Slot ${idx + 1}: the plugin UI did not load — ${detail} · worker ${sw} · ${cached}`);
+  const via = iframe.src.includes(BUNDLE_UI_PREFIX) ? 'served over HTTP' : 'served by worker';
+  showError(ui, `Slot ${idx + 1}: the plugin UI did not load — ${detail} · worker ${sw} · ${cached} · ${via}`);
 }
 
 /** Iframes that have posted at least one message to the host. A plugin UI
@@ -1702,8 +1798,21 @@ function wirePanelDrag(panel: HTMLElement): void {
 // Plugin-proxy SW (serves bundled UI assets to iframes)
 // ---------------------------------------------------------------------------
 
-async function registerPluginProxy(): Promise<void> {
-  if (!('serviceWorker' in navigator)) return;
+/** Whether the proxy service worker is serving plugin UI files, and if not,
+ *  why (shown in the footer and in panel-load errors). */
+interface ProxyStatus {
+  ok: boolean;
+  reason: string;
+}
+
+/** How long a new worker may take to activate before we stop waiting and
+ *  serve plugin UIs over plain HTTP instead. */
+const PROXY_ACTIVATE_TIMEOUT_MS = 4000;
+
+async function registerPluginProxy(): Promise<ProxyStatus> {
+  if (!('serviceWorker' in navigator)) {
+    return { ok: false, reason: 'no service workers in this browser' };
+  }
   // Files cached for a previous visit's plugins are of no use to this one.
   if ('caches' in window) await caches.delete(PROXY_CACHE).catch(() => false);
   try {
@@ -1712,19 +1821,26 @@ async function registerPluginProxy(): Promise<void> {
     });
     if (!reg.active) {
       const sw = reg.installing ?? reg.waiting;
-      if (sw) {
-        await new Promise<void>((resolve) => {
-          const check = (): void => {
-            if (sw.state === 'activated') resolve();
-          };
-          sw.addEventListener('statechange', check);
-          check();
-        });
-      }
+      if (!sw) return { ok: false, reason: 'service worker did not install' };
+      const activated = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), PROXY_ACTIVATE_TIMEOUT_MS);
+        const check = (): void => {
+          if (sw.state === 'activated') {
+            clearTimeout(timer);
+            resolve(true);
+          } else if (sw.state === 'redundant') {
+            clearTimeout(timer);
+            resolve(false);
+          }
+        };
+        sw.addEventListener('statechange', check);
+        check();
+      });
+      if (!activated) return { ok: false, reason: `service worker stuck in "${sw.state}"` };
     }
   } catch (err) {
-    console.warn('[vocal-host] plugin-proxy SW registration failed', err);
-    return;
+    console.warn('[wclap-host] plugin-proxy SW registration failed', err);
+    return { ok: false, reason: `service worker refused: ${(err as Error).message || String(err)}` };
   }
 
   navigator.serviceWorker.addEventListener('message', (event) => {
@@ -1736,6 +1852,7 @@ async function registerPluginProxy(): Promise<void> {
     if (!(source instanceof ServiceWorker)) return;
     void respondProxy(source, data.id, data.path);
   });
+  return { ok: true, reason: 'service worker' };
 }
 
 async function respondProxy(
@@ -2009,7 +2126,14 @@ const keyboard = mountKeyboard(document.getElementById('keyboard') as HTMLElemen
 });
 
 const buildLabelEl = document.getElementById('buildLabel');
-if (buildLabelEl) buildLabelEl.textContent = __BUILD_LABEL__;
+if (buildLabelEl) {
+  buildLabelEl.textContent = __BUILD_LABEL__;
+  // Which way plugin UIs are served here, and why — readable on a device
+  // without dev tools.
+  void proxyReady.then((p) => {
+    buildLabelEl.textContent = `${__BUILD_LABEL__} · plugin UI via ${p.ok ? 'service worker' : `HTTP (${p.reason})`}`;
+  });
+}
 
 ui.midiPanic.addEventListener('click', panicAllNotesOff);
 ui.midiRescan.addEventListener('click', rescanMidi);

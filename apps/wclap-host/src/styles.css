@@ -1010,6 +1010,8 @@ h1 {
 /* The page is an instrument surface: fingers scroll it, but a pinch or a
    quick double tap (two notes, two button presses) must not zoom it. */
 html {
+  /* The first line is for browsers that do not know the second. */
+  touch-action: manipulation;
   touch-action: pan-x pan-y;
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;

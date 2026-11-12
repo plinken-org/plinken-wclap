@@ -7,9 +7,22 @@
 // proxy adds `Access-Control-Allow-Origin: *` + `Cross-Origin-Resource-Policy:
 // cross-origin` to the upstream response so it satisfies the page's COEP.
 
+import {
+  BUNDLE_UI_PREFIX,
+  BUNDLE_UI_HEADERS,
+  parseBundleUiPath,
+  findTarEntry,
+  isGzip,
+  mimeForBundleFile
+} from './bundle-ui.js';
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    if (url.pathname.startsWith(BUNDLE_UI_PREFIX)) {
+      return handleBundleUi(request, env, url);
+    }
 
     if (url.pathname === '/r2-proxy') {
       return handleProxy(request, url);
@@ -28,6 +41,42 @@ export default {
     });
   }
 };
+
+// One file out of a plugin bundle, for browsers where the page cannot use a
+// service worker to serve the plugin's UI (see worker/bundle-ui.js).
+async function handleBundleUi(request, env, url) {
+  const fail = (status, why) =>
+    new Response(`bundle-ui: ${why}`, { status, headers: { 'Content-Type': 'text/plain', ...BUNDLE_UI_HEADERS } });
+  if (request.method !== 'GET' && request.method !== 'HEAD') return fail(405, 'method not allowed');
+  const parsed = parseBundleUiPath(url.pathname);
+  if (!parsed) return fail(400, 'bad path');
+
+  // Only bundles this origin already serves: a shelf sample, or a remote
+  // one through the existing /r2-proxy route.
+  let bundle;
+  try {
+    bundle = new URL(parsed.bundleUrl, url.origin);
+  } catch {
+    return fail(400, 'bad bundle url');
+  }
+  if (bundle.origin !== url.origin) return fail(400, 'bundle must be on this origin');
+  const upstream =
+    bundle.pathname === '/r2-proxy'
+      ? await handleProxy(new Request(bundle.href), bundle)
+      : await env.ASSETS.fetch(new Request(bundle.href));
+  if (!upstream.ok) return fail(404, 'bundle not found');
+
+  let bytes = new Uint8Array(await upstream.arrayBuffer());
+  if (isGzip(bytes)) {
+    const stream = new Response(bytes).body.pipeThrough(new DecompressionStream('gzip'));
+    bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+  const file = findTarEntry(bytes, parsed.filePath);
+  if (!file) return fail(404, 'not in bundle');
+  return new Response(request.method === 'HEAD' ? null : file, {
+    headers: { 'Content-Type': mimeForBundleFile(parsed.filePath), ...BUNDLE_UI_HEADERS }
+  });
+}
 
 async function handleProxy(request, requestUrl) {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
