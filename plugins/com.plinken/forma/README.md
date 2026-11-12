@@ -96,21 +96,26 @@ Standard `widgets/transport.mjs` for params, plus:
 | plugin → UI | CBOR `{"forma": bytes}`, first byte `1` | slot overview: slot, status, progress, flags, root Hz, seconds, 128-point level curve, 4 × 128 layer envelopes |
 | plugin → UI | CBOR `{"forma": bytes}`, first byte `2` | 20 Hz tick: playheads, voice count, analysis progress |
 
-### Generated sources (host hook)
+### Generated sources (host extension)
 
 A host that can create audio from a text prompt can offer it inside FORMA.
 The plugin itself is unchanged: generated audio enters through the same
-import path as a dropped file. These are plain-object `postMessage`s
-between the UI iframe and its parent (not forwarded to the wasm):
+import path as a dropped file. The messages are plain-object
+`postMessage`s between the UI iframe and its parent, in the `plinkenHost`
+family (they are not forwarded to the wasm):
 
-1. UI → host on mount: `{ type: 'plinken:capabilities?', plugin }`.
-2. Host → UI: `{ type: 'plinken:capabilities', generateSource: true }` —
-   only then does each slot show a prompt field.
-3. UI → host: `{ type: 'plinken:generate-source', plugin, slot, prompt }`.
-4. Host → UI: `{ type: 'plinken:generated-source', slot, audio }` with
-   `audio` an `ArrayBuffer` of an encoded audio file (omit it on failure).
+1. UI → host on mount: `{ plinkenHost: 'capabilities' }`.
+2. Host → UI: `{ plinkenHost: 'capabilities', generateSource: true,
+   plinsPerSecond }` — only then does each slot show a prompt field.
+   `plinsPerSecond` (number or `null`) is the host's price; the button
+   shows the cost of the chosen length before the click.
+3. UI → host: `{ plinkenHost: 'generateSource', slot, prompt, seconds }`.
+4. Host → UI: `{ plinkenHost: 'sourceGenerated', slot, ok: true, audio }`
+   with `audio` an `ArrayBuffer` of an encoded audio file, or
+   `{ …, ok: false, error }` with a message the UI shows in the slot.
 
-No host implements this yet; `apps/wclap-host` ignores the messages.
+The Plinken app implements this; `apps/wclap-host` does not, so the
+prompt field stays hidden there.
 
 ## Not yet built
 

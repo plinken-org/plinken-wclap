@@ -35,7 +35,7 @@
     pointer-events: none; font-family: var(--font-mono); font-size: 0.62rem; color: var(--text-muted); gap: 1px;
   }
   .iris-info .big { font-family: var(--font-display); font-size: 0.74rem; color: var(--text); }
-  .iris-info > div { max-width: 78px; text-align: center; line-height: 1.15; }
+  .iris-info > div { max-width: 84px; text-align: center; line-height: 1.15; }
   .pots { display: flex; align-items: flex-start; justify-content: center; gap: 3px; flex-wrap: nowrap; }
   .pots > div { width: 46px; display: flex; justify-content: center; }
   .group-name { font-size: 0.52rem; color: var(--text-dim); letter-spacing: 0.14em; font-family: var(--font-display); }
@@ -49,6 +49,10 @@
   .gen input {
     flex: 1; min-width: 0; background: var(--bg-deep); color: var(--text); border: 1px solid var(--border-soft);
     border-radius: 3px; font-family: var(--font-mono); font-size: 0.66rem; padding: 3px 6px;
+  }
+  .gen select {
+    background: var(--bg-deep); color: var(--text-muted); border: 1px solid var(--border-soft);
+    border-radius: 3px; font-family: var(--font-mono); font-size: 0.62rem;
   }
   .centre { justify-content: space-between; }
   .centre .pots { flex-wrap: wrap; row-gap: 6px; }
@@ -103,6 +107,10 @@
   </div>
   <div class="gen">
     <input type="text" maxlength="200" placeholder="Describe a sound to generate…" data-gen="prompt">
+    <select data-gen="seconds" title="Length of the generated sound">
+      <option value="2">2 s</option><option value="5" selected>5 s</option>
+      <option value="10">10 s</option><option value="20">20 s</option>
+    </select>
     <button class="btn" data-act="generate">Generate</button>
   </div>
   <div class="iris-wrap">
@@ -188,6 +196,9 @@
     playhead: 0, position: 0.1, busy: '',
   }));
   let activeVoices = 0;
+  // Host price for generated sound, when the host offers generation.
+  let plinsPerSecond = null;
+  const costUpdaters = [];
 
   const slotEls = [...document.querySelectorAll('.slot')];
   slotEls.forEach((panel, index) => {
@@ -249,13 +260,24 @@
 
     // -- generated sources (only when the host says it can) -----------------
     const prompt = panel.querySelector('[data-gen="prompt"]');
+    const seconds = panel.querySelector('[data-gen="seconds"]');
+    const genBtn = panel.querySelector('[data-act="generate"]');
+    // Generation is billed by the host: say what it will cost before the click.
+    const showCost = () => {
+      const cost = plinsPerSecond == null ? null : Math.ceil(plinsPerSecond * Number(seconds.value));
+      genBtn.textContent = cost == null ? 'Generate' : `Generate · ${cost} P`;
+      genBtn.title = cost == null ? 'Generate a source from this description' : `Generate a source from this description (about ${cost} Plins)`;
+    };
+    costUpdaters.push(showCost);
+    seconds.addEventListener('change', showCost);
     const generate = () => {
       const text = prompt.value.trim();
-      if (!text) return;
+      if (!text || genBtn.disabled) return;
+      genBtn.disabled = true;
       slots[index].busy = 'GENERATING';
-      window.parent.postMessage({ type: 'plinken:generate-source', plugin: 'com.plinken.forma', slot: index, prompt: text }, '*');
+      window.parent.postMessage({ plinkenHost: 'generateSource', slot: index, prompt: text, seconds: Number(seconds.value) }, '*');
     };
-    panel.querySelector('[data-act="generate"]').addEventListener('click', generate);
+    genBtn.addEventListener('click', generate);
     prompt.addEventListener('keydown', (e) => { if (e.key === 'Enter') generate(); });
 
     // -- the ring: drag to set Position --------------------------------------
@@ -280,14 +302,19 @@
     return decodeCtx.decodeAudioData(arrayBuffer);
   }
 
+  // Show a short message in the slot's ring, then clear it.
+  function flash(slot, text, ms = 1800) {
+    slots[slot].busy = text;
+    setTimeout(() => { if (slots[slot].busy === text) slots[slot].busy = ''; }, ms);
+  }
+
   async function importFile(slot, file) {
     slots[slot].busy = 'DECODING';
     try {
       importAudio(slot, await decode(await file.arrayBuffer()));
     } catch (err) {
       console.warn('[forma] could not decode', file.name, err);
-      slots[slot].busy = 'NOT AUDIO';
-      setTimeout(() => { if (slots[slot].busy === 'NOT AUDIO') slots[slot].busy = ''; }, 1800);
+      flash(slot, 'NOT AUDIO');
     }
   }
 
@@ -366,15 +393,24 @@
       }
       return;
     }
-    // Host capability: generating a source from a text prompt. Documented in
-    // the plugin README; a host that does not announce it never sees the UI.
+    // Host extension (the `plinkenHost` faceplate messages): generating a
+    // source from a text prompt. Documented in the plugin README; a host
+    // that does not answer `capabilities` never shows the prompt field.
     if (data && typeof data === 'object') {
-      if (data.type === 'plinken:capabilities') root.classList.toggle('can-generate', !!data.generateSource);
-      if (data.type === 'plinken:generated-source' && slots[data.slot]) {
-        if (data.audio instanceof ArrayBuffer) {
-          decode(data.audio).then((buf) => importAudio(data.slot, buf)).catch(() => { slots[data.slot].busy = ''; });
+      if (data.plinkenHost === 'capabilities') {
+        root.classList.toggle('can-generate', !!data.generateSource);
+        plinsPerSecond = typeof data.plinsPerSecond === 'number' ? data.plinsPerSecond : null;
+        costUpdaters.forEach((f) => f());
+      }
+      if (data.plinkenHost === 'sourceGenerated' && slots[data.slot]) {
+        const slot = data.slot;
+        slotEls[slot].querySelector('[data-act="generate"]').disabled = false;
+        if (data.ok && data.audio instanceof ArrayBuffer) {
+          decode(data.audio).then((buf) => importAudio(slot, buf)).catch(() => flash(slot, 'NOT AUDIO'));
         } else {
-          slots[data.slot].busy = '';
+          // The host's own words (out of credit, signed out, …).
+          console.warn('[forma] generation failed:', data.error);
+          flash(slot, String(data.error || 'Generation failed'), 4000);
         }
       }
     }
@@ -384,7 +420,7 @@
   // Ask for the slot pictures (the scaffold answers "ready" with params only).
   Promise.resolve().then(() => {
     window.parent.postMessage(new Uint8Array([0x66, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x3f]).buffer, '*');
-    window.parent.postMessage({ type: 'plinken:capabilities?', plugin: 'com.plinken.forma' }, '*');
+    window.parent.postMessage({ plinkenHost: 'capabilities' }, '*');
   });
 
   // ---- drawing --------------------------------------------------------------
@@ -446,7 +482,8 @@
 
     const main = panel.querySelector('[data-info="main"]');
     const sub = panel.querySelector('[data-info="sub"]');
-    const text = s.busy ? [s.busy, ''] : s.status !== 2 ? ['ANALYSING', `${s.progress}%`]
+    // Short states go in the big line; a host's error sentence in the small one.
+    const text = s.busy ? (s.busy.length > 12 ? ['!', s.busy] : [s.busy, '']) : s.status !== 2 ? ['ANALYSING', `${s.progress}%`]
       : [s.pitched ? noteOf(s.rootHz) : '~', `${s.seconds.toFixed(1)}s${s.imported ? '' : ' factory'}`];
     if (main.textContent !== text[0]) main.textContent = text[0];
     if (sub.textContent !== text[1]) sub.textContent = text[1];
