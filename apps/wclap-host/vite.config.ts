@@ -1,5 +1,24 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath, URL } from 'node:url';
+import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+
+// What the page footer shows, so anyone looking at a device can tell which
+// build it is running: package version, the commit it was built from (with
+// a `+` when the tree had uncommitted changes) and the build day.
+const pkgVersion = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8')
+).version as string;
+function gitCommit(): string {
+  try {
+    const sha = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
+    const dirty = execSync('git status --porcelain', { encoding: 'utf8' }).trim() !== '';
+    return sha + (dirty ? '+' : '');
+  } catch {
+    return 'unknown';
+  }
+}
+const buildLabel = `v${pkgVersion} · ${gitCommit()} · ${new Date().toISOString().slice(0, 10)}`;
 
 // The upstream `wclap-host-js` repo ships ES module sources (no package.json),
 // so we expose it through an alias rather than as a workspace dep.
@@ -88,6 +107,9 @@ const r2ProxyDevMiddleware = {
 
 export default defineConfig({
   plugins: [stripGzipEncodingForTarGz, r2ProxyDevMiddleware],
+  define: {
+    __BUILD_LABEL__: JSON.stringify(buildLabel)
+  },
   resolve: {
     alias: {
       '@webclap/wclap-host-js': `${wclapJsRoot}/wclap.mjs`

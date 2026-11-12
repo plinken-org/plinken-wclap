@@ -15,6 +15,7 @@ import { getHost, startHost } from '@webclap/wclap-host-js';
 import workletUrl from './wclap-runtime/chain-worklet.mjs?worker&url';
 import { fetchWclap, type WclapManifest } from './plugin-loader';
 import { IframeBridge } from './iframe-bridge';
+import { mountKeyboard } from './keyboard';
 import {
   getElements,
   setStatus,
@@ -1399,7 +1400,10 @@ async function reportPanelLoad(idx: number, iframe: HTMLIFrameElement, uiKey: st
   try {
     const doc = iframe.contentDocument;
     const text = (doc?.body?.textContent ?? '').trim();
-    if (doc && !text.startsWith('plugin-proxy:') && (doc.body?.children.length ?? 0) > 0) return;
+    if (doc && !text.startsWith('plugin-proxy:') && (doc.body?.children.length ?? 0) > 0) {
+      void reportSilentPanel(idx, iframe);
+      return;
+    }
     detail = text ? `"${text.slice(0, 60)}"` : 'empty document';
   } catch (err) {
     detail = `unreadable (${(err as Error).message})`;
@@ -1412,6 +1416,31 @@ async function reportPanelLoad(idx: number, iframe: HTMLIFrameElement, uiKey: st
     cached = hit ? 'file cached' : 'file not cached';
   }
   showError(ui, `Slot ${idx + 1}: the plugin UI did not load — ${detail} · worker ${sw} · ${cached}`);
+}
+
+/** Iframes that have posted at least one message to the host. A plugin UI
+ *  announces itself on mount (the "ready" handshake), so a panel whose page
+ *  loaded but never spoke has a script that failed to start. */
+const talkingIframes = new WeakSet<HTMLIFrameElement>();
+window.addEventListener('message', (e) => {
+  for (const slot of slots) {
+    if (slot.iframe && slot.iframe.contentWindow === e.source) talkingIframes.add(slot.iframe);
+  }
+});
+
+async function reportSilentPanel(idx: number, iframe: HTMLIFrameElement): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  if (talkingIframes.has(iframe) || slots[idx].iframe !== iframe) return;
+  let detail = '';
+  try {
+    const doc = iframe.contentDocument;
+    const scripts = doc?.scripts.length ?? 0;
+    const sheets = doc?.styleSheets.length ?? 0;
+    detail = ` (${scripts} script${scripts === 1 ? '' : 's'}, ${sheets} stylesheet${sheets === 1 ? '' : 's'}, ${navigator.userAgent.replace(/^.*?\) /, '')})`;
+  } catch {
+    // Keep the bare message.
+  }
+  showError(ui, `Slot ${idx + 1}: the plugin UI loaded but its script did not start${detail}`);
 }
 
 function buildPluginPanel(
@@ -1599,7 +1628,21 @@ function closePluginUi(idx: number): void {
 
 function positionPanel(panel: HTMLElement): void {
   const offset = (panelCascade++ % 8) * 24;
-  panel.style.left = `${40 + offset}px`;
+  // A panel wider than the screen (a synth on a portrait tablet) is scaled
+  // down to fit rather than cut off. The iframe keeps its declared size, so
+  // the plugin still lays out its full UI — only the picture shrinks.
+  const MARGIN = 8;
+  const fit = (window.innerWidth - 2 * MARGIN) / panel.offsetWidth;
+  if (fit < 1) {
+    panel.style.transformOrigin = 'top left';
+    panel.style.transform = `scale(${fit.toFixed(4)})`;
+    panel.style.left = `${MARGIN}px`;
+    panel.style.top = `${40 + offset}px`;
+    return;
+  }
+  // Otherwise cascade from the top-left, but never start past the right edge.
+  const left = Math.min(40 + offset, Math.max(MARGIN, window.innerWidth - MARGIN - panel.offsetWidth));
+  panel.style.left = `${left}px`;
   panel.style.top = `${40 + offset}px`;
 }
 
@@ -1822,6 +1865,7 @@ function panicAllNotesOff(): void {
   for (let key = 0; key < 128; key++) {
     postEventToChain(encodeClapNoteEvent(false, 0, key, 0));
   }
+  keyboard.releaseAll();
   heldNotes.clear();
   refreshMidiNotesUi();
   flashMidiLed(ui);
@@ -1924,6 +1968,29 @@ async function setupWebMidi(): Promise<void> {
     console.log(`[wclap-host] Web MIDI: ${count} input(s) listening`);
   }
 }
+
+// On-screen keyboard: the same CLAP note events a MIDI device produces.
+// Its first touch is also the user gesture Safari needs to start audio.
+const keyboard = mountKeyboard(document.getElementById('keyboard') as HTMLElement, {
+  onNoteOn: (key, velocity) => {
+    if (baseGraph && baseGraph.ctx.state !== 'running') void baseGraph.ctx.resume();
+    if (!chainNode) {
+      setStatus(ui, 'Load an instrument from the shelf to play it.');
+      return;
+    }
+    flashMidiLed(ui);
+    heldNotes.set(`kbd:${key}`, { key, vel: velocity });
+    refreshMidiNotesUi();
+    postEventToChain(encodeClapNoteEvent(true, 0, key, velocity));
+  },
+  onNoteOff: (key) => {
+    if (heldNotes.delete(`kbd:${key}`)) refreshMidiNotesUi();
+    postEventToChain(encodeClapNoteEvent(false, 0, key, 0));
+  }
+});
+
+const buildLabelEl = document.getElementById('buildLabel');
+if (buildLabelEl) buildLabelEl.textContent = __BUILD_LABEL__;
 
 ui.midiPanic.addEventListener('click', panicAllNotesOff);
 ui.midiRescan.addEventListener('click', rescanMidi);

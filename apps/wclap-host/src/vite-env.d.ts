@@ -7,3 +7,6 @@ declare module '*?worker&url' {
   const src: string;
   export default src;
 }
+
+/** `v<version> · <commit> · <date>` of this build (vite.config.ts). */
+declare const __BUILD_LABEL__: string;

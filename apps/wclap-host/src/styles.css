@@ -941,3 +941,68 @@ h1 {
   align-items: center;
 }
 .footer .sep { color: var(--border); }
+
+/* On-screen keyboard */
+.kbd {
+  margin-bottom: 0.6rem;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.kbdBar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.kbdOct {
+  width: 2.2rem;
+  height: 1.8rem;
+  background: var(--bg-deep);
+  color: var(--text);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.kbdOct:disabled { opacity: 0.35; cursor: default; }
+.kbdKeys {
+  position: relative;
+  height: 7.5rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-deep);
+  /* The keys take every touch: no scrolling or zooming starts on them. */
+  touch-action: none;
+}
+.kbdKey {
+  position: absolute;
+  top: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+}
+.kbdKey--white {
+  height: 100%;
+  background: #e9e9ee;
+  color: #6b6b78;
+  border-right: 1px solid #9a9aa6;
+}
+.kbdKey--black {
+  height: 60%;
+  background: #17171c;
+  border-radius: 0 0 3px 3px;
+  transform: translateX(-50%);
+  z-index: 1;
+}
+.kbdKey--down.kbdKey--white { background: #8691da; color: #fff; }
+.kbdKey--down.kbdKey--black { background: #925db3; }
+.buildLabel { color: var(--text-dim); }

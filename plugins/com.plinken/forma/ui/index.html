@@ -4,12 +4,40 @@
 <meta charset="utf-8">
 <title>FORMA</title>
 <link rel="stylesheet" href="../widgets/widgets.css">
+<script>
+  // A classic script, first in the page: if the module below fails to load
+  // or run (an unsupported browser, a missing file), say so in the panel
+  // instead of leaving it dead with no explanation.
+  (function () {
+    function show(text) {
+      var box = document.getElementById('ui-error');
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'ui-error';
+        box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9;padding:6px 10px;' +
+          'background:#c4566d;color:#fff;font:12px/1.3 ui-monospace,Menlo,monospace;white-space:pre-wrap';
+        (document.body || document.documentElement).appendChild(box);
+      }
+      box.textContent = 'FORMA UI error: ' + text;
+    }
+    window.addEventListener('error', function (e) {
+      var where = e.filename ? ' (' + String(e.filename).split('/').pop() + ':' + e.lineno + ')' : '';
+      // A failed <link>/<script> load has no message; name the element.
+      var what = e.message || (e.target && e.target.tagName ? 'could not load ' + (e.target.src || e.target.href || e.target.tagName) : 'unknown');
+      show(what + where);
+    }, true);
+    window.addEventListener('unhandledrejection', function (e) {
+      show(String((e.reason && e.reason.message) || e.reason));
+    });
+  })();
+</script>
 <style>
   body { overflow: hidden; user-select: none; -webkit-user-select: none; }
   .root { width: 100%; height: 100%; display: grid; }
   .root.expanded { grid-template-rows: auto 1fr; padding: 8px 12px 10px; gap: 8px; }
   .head { display: flex; align-items: baseline; justify-content: space-between; }
   .title { font-family: var(--font-display); font-size: 0.82rem; letter-spacing: 0.32em; color: var(--text); }
+  .title .version { font-family: var(--font-mono); font-size: 0.58rem; letter-spacing: 0.04em; color: var(--text-dim); }
   .voices { font-family: var(--font-mono); font-size: 0.62rem; color: var(--text-dim); }
   .body { display: grid; grid-template-columns: 1fr 212px 1fr; gap: 10px; min-height: 0; }
   .panel {
@@ -73,7 +101,7 @@
 <body>
 <div class="root expanded" id="root">
   <div class="head">
-    <div class="title">FORMA</div>
+    <div class="title">FORMA <span class="version">0.1.1</span></div>
     <div class="voices" id="voices"></div>
   </div>
   <div class="body">
