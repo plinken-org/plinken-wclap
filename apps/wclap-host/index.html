@@ -50,10 +50,10 @@
             class="sourceToggle"
             role="radiogroup"
             aria-label="Audio source: Off, Tone or Mic"
-            data-source="tone"
+            data-source="off"
           >
-            <button type="button" class="sourceToggleLabel" role="radio" data-mode="off" aria-checked="false">Off</button>
-            <button type="button" class="sourceToggleLabel" role="radio" data-mode="tone" aria-checked="true">Tone</button>
+            <button type="button" class="sourceToggleLabel" role="radio" data-mode="off" aria-checked="true">Off</button>
+            <button type="button" class="sourceToggleLabel" role="radio" data-mode="tone" aria-checked="false">Tone</button>
             <button type="button" class="sourceToggleLabel" role="radio" data-mode="mic" aria-checked="false">Mic</button>
             <span class="sourceToggleThumb" aria-hidden="true"></span>
           </div>
@@ -79,7 +79,7 @@
             <button id="stopBtn" type="button" disabled>■ Stop</button>
           </div>
           <div class="sourceStatus">
-            <span id="sourceStatus" class="sourceStatusText">Tone · 440 Hz</span>
+            <span id="sourceStatus" class="sourceStatusText">Off · no input</span>
           </div>
         </div>
       </section>

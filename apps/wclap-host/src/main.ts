@@ -200,7 +200,8 @@ interface BaseGraph {
   meterTimer: number;
 }
 
-let sourceMode: SourceMode = 'tone';
+// Off by default: nothing sounds until the user asks for a source.
+let sourceMode: SourceMode = 'off';
 let micChannelMode: MicChannelMode = 'L';
 
 const ui = getElements();
