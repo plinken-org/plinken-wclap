@@ -32,7 +32,7 @@ static PLUGIN_DEF: PluginDef = PluginDef {
     name: b"FORMA\0",
     vendor: b"Plinken\0",
     url: b"https://plinken.org\0",
-    version: b"0.1.3\0",
+    version: b"0.1.4\0",
     description: b"Two-slot synthesizer: granular and spectral-resynthesis engines built from your own samples.\0",
     features: &[b"instrument\0", b"synthesizer\0", b"sampler\0"],
     audio_inputs: 0,
@@ -41,8 +41,12 @@ static PLUGIN_DEF: PluginDef = PluginDef {
     ui_path: Some(b"/ui/index.html\0"),
 };
 
-/// Extra-state magic, little-endian "FRM1".
-const STATE_MAGIC: [u8; 4] = *b"FRM1";
+/// Extra-state magic. `FRM2` stores sources as 16-bit PCM: the state blob
+/// lives inside the host's project (base64 in Plinken), so its size is the
+/// project's size, and 16 bits is all a normalised source needs.
+const STATE_MAGIC: [u8; 4] = *b"FRM2";
+/// The first format, 32-bit float PCM. Still read; never written.
+const STATE_MAGIC_F32: [u8; 4] = *b"FRM1";
 /// Points per curve in the UI overview.
 const OVERVIEW_POINTS: usize = 128;
 /// Seconds between playhead/progress messages to the UI.
@@ -312,15 +316,23 @@ impl Plugin for FormaPlugin {
             out.push(1);
             out.extend_from_slice(&slot.source.sr.to_le_bytes());
             out.extend_from_slice(&(slot.source.data.len() as u32).to_le_bytes());
+            out.reserve(slot.source.data.len() * 2);
             for v in &slot.source.data {
-                out.extend_from_slice(&v.to_le_bytes());
+                let q = (v.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+                out.extend_from_slice(&q.to_le_bytes());
             }
         }
         out
     }
 
     fn load_extra_state(&mut self, bytes: &[u8]) {
-        let Some(mut rest) = bytes.strip_prefix(&STATE_MAGIC) else { return };
+        let (mut rest, width) = if let Some(r) = bytes.strip_prefix(&STATE_MAGIC) {
+            (r, 2)
+        } else if let Some(r) = bytes.strip_prefix(&STATE_MAGIC_F32) {
+            (r, 4)
+        } else {
+            return;
+        };
         for i in 0..SLOTS {
             let Some((&has, tail)) = rest.split_first() else { return };
             rest = tail;
@@ -336,8 +348,13 @@ impl Plugin for FormaPlugin {
             let sr = f32::from_le_bytes([rest[0], rest[1], rest[2], rest[3]]);
             let frames = u32::from_le_bytes([rest[4], rest[5], rest[6], rest[7]]) as usize;
             rest = &rest[8..];
-            let Some(byte_len) = frames.checked_mul(4).filter(|n| *n <= rest.len()) else { return };
-            let data = rest[..byte_len].chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+            let Some(byte_len) = frames.checked_mul(width).filter(|n| *n <= rest.len()) else { return };
+            let pcm = &rest[..byte_len];
+            let data = if width == 2 {
+                pcm.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32767.0).collect()
+            } else {
+                pcm.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+            };
             rest = &rest[byte_len..];
             if let Some(source) = Source::from_mono(sr, data) {
                 self.install(i, source, true);
@@ -506,6 +523,36 @@ mod tests {
         let mut b = active();
         b.load_extra_state(b"NOPE\x01\x00\x00");
         assert!(!b.slots[0].imported);
+    }
+
+    #[test]
+    fn state_is_sixteen_bit_and_the_float_format_still_loads() {
+        let mut a = active();
+        let pcm = saw(147.0, 8820);
+        a.on_message(&plsp(1, 44_100, 1, 8820, 0, &pcm));
+        let blob = a.save_extra_state();
+        // magic + slot A flag + slot B flag + rate + count + 2 bytes a frame.
+        assert_eq!(blob.len(), 4 + 1 + 1 + 4 + 4 + 8820 * 2);
+
+        // A blob as version 0.1.3 and earlier wrote it.
+        let mut old = b"FRM1\x00\x01".to_vec();
+        old.extend_from_slice(&44_100.0f32.to_le_bytes());
+        old.extend_from_slice(&8820u32.to_le_bytes());
+        for v in &a.slots[1].source.data {
+            old.extend_from_slice(&v.to_le_bytes());
+        }
+        let (mut from_new, mut from_old) = (active(), active());
+        from_new.load_extra_state(&blob);
+        from_old.load_extra_state(&old);
+        assert!(from_new.slots[1].imported && from_old.slots[1].imported);
+        let worst = from_new.slots[1]
+            .source
+            .data
+            .iter()
+            .zip(&from_old.slots[1].source.data)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-4, "16-bit state differs from float by {worst}");
     }
 
     #[test]

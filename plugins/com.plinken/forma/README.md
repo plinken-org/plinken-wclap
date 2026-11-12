@@ -80,10 +80,10 @@ engine keeps its place in the source.
   decodes it, mixes to mono, truncates to 20 s and sends it as PLSP chunks
   (`crates/sample-core`), slot 0 = A, 1 = B. `Reset` sends a clear.
 - **Persistence:** imported sources are saved in the plugin state
-  (`save_extra_state`, magic `FRM1`: per slot a flag, then sample rate,
-  frame count and f32 PCM), so a project reloads in any host without the
+  (`save_extra_state`, magic `FRM2`: per slot a flag, then sample rate,
+  frame count and 16-bit PCM), so a project reloads in any host without the
   original file. The model is re-derived on load. A 20 s source adds
-  ≈ 3.8 MB to the state.
+  ≈ 1.9 MB to the state. (`FRM1`, 32-bit float, is still read.)
 
 ## UI ↔ plugin messages
 
