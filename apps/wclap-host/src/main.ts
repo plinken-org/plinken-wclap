@@ -44,6 +44,8 @@ import {
 const NUM_SLOTS = 5;
 const SHELF_DT_TYPE = 'application/x-plinken-shelf-id';
 const PROXY_PREFIX = '/plugin-proxy';
+/** Slots with a plugin load in flight (fetch, compile, instantiate). */
+const loadingSlots = new Set<number>();
 /** Stop Safari zooming a document on a pinch or a quick second tap. CSS
  *  `touch-action` is the standard way and is set as well, but Safari on
  *  iPad still zoomed; these are its own gesture events, and the classic
@@ -266,7 +268,9 @@ async function ensureBaseGraph(): Promise<BaseGraph> {
   // noise during the switch.
   const toneGain = ctx.createGain();
   const micGain = ctx.createGain();
-  toneGain.gain.value = sourceMode === 'tone' ? TONE_LEVEL_GAIN : 0;
+  // Not simply "on in tone mode": the graph is first built by a plugin
+  // load, and the tone must not sound while that load is in flight.
+  toneGain.gain.value = toneGainNow();
   micGain.gain.value = sourceMode === 'mic' ? 1 : 0;
   merger.connect(toneGain);
 
@@ -453,6 +457,8 @@ function onWorkletMessage(e: MessageEvent): void {
       )
     );
     setStatus(ui, `Load failed — see error below.`);
+    loadingSlots.clear();
+    refreshSourceGate();
     return;
   }
   switch (data.kind) {
@@ -504,6 +510,8 @@ function onWorkletMessage(e: MessageEvent): void {
       showError(ui, new Error(`chain crashed: ${data.error}`));
       break;
     case 'error':
+      loadingSlots.delete(data.slot as number);
+      refreshSourceGate();
       showError(ui, new Error(`slot ${data.slot}: ${data.error}`));
       break;
   }
@@ -528,6 +536,7 @@ function onLoadedFromWorklet(data: {
   slot.webviewUri = data.info?.webview ?? null;
   const name = data.info?.desc?.name ?? slot.manifest?.name ?? data.pluginId;
   slot.label = name;
+  loadingSlots.delete(data.slot);
   refreshPluginSummary();
   renderRack();
   setStatus(ui, `${name} loaded in slot ${data.slot + 1}.`);
@@ -686,14 +695,28 @@ function rackHasInstrument(): boolean {
   });
 }
 
+/** Why the test tone is silent right now, or null when it should sound.
+ *  While any plugin is loading we do not yet know what it is, and loading
+ *  is also the moment audio first starts — so the tone waits until the
+ *  rack has settled. */
+function toneMuteReason(): string | null {
+  if (loadingSlots.size > 0) return 'loading';
+  if (rackHasInstrument()) return 'instrument in the rack';
+  return null;
+}
+
+function toneGainNow(): number {
+  return sourceMode === 'tone' && toneMuteReason() === null ? TONE_LEVEL_GAIN : 0;
+}
+
 function refreshSourceGate(): void {
-  const toneMuted = sourceMode === 'tone' && rackHasInstrument();
   if (baseGraph) {
-    baseGraph.toneGain.gain.value = sourceMode === 'tone' && !toneMuted ? TONE_LEVEL_GAIN : 0;
+    baseGraph.toneGain.gain.value = toneGainNow();
     baseGraph.micGain.gain.value = sourceMode === 'mic' ? 1 : 0;
   }
   if (sourceMode === 'tone') {
-    ui.sourceStatus.textContent = toneMuted ? 'Tone muted · instrument in the rack' : 'Tone · 440 Hz';
+    const why = toneMuteReason();
+    ui.sourceStatus.textContent = why ? `Tone muted · ${why}` : 'Tone · 440 Hz';
   }
 }
 
@@ -1272,6 +1295,9 @@ async function loadIntoSlot(
   clearError(ui);
   const name = shelfDisplayName(item);
   setStatus(ui, `Loading ${name} into slot ${idx + 1}…`);
+  // Before the audio graph is built or resumed below.
+  loadingSlots.add(idx);
+  refreshSourceGate();
   try {
     const node = await ensureChainNode();
     if (slots[idx].pluginId) await unloadSlot(idx);
@@ -1302,6 +1328,8 @@ async function loadIntoSlot(
     const { module: _strippedModule, ...wclapForWorklet } = wclapConfig as Record<string, unknown>;
     node.port.postMessage({ kind: 'load', slot: idx, wclap: wclapForWorklet, pluginId: targetPluginId });
   } catch (e) {
+    loadingSlots.delete(idx);
+    refreshSourceGate();
     showError(ui, e);
     setStatus(ui, `Failed to load slot ${idx + 1}.`);
   }
