@@ -1,5 +1,7 @@
-// Upstream `getWclap` allocates `new WebAssembly.Memory({ maximum: 32768
-// pages, shared: true })` — 2 GB of virtual address space per plugin load.
+// Upstream `getWclap` and its WASI layer allocate `new WebAssembly.Memory({
+// maximum: 32768 pages, shared: true })` — 2 GB of virtual address space
+// each. Import this first in EVERY global scope that runs them: the page
+// (main.ts) and the audio worklet (chain-worklet.mjs).
 // On some browsers/machines that fails outright with "RangeError: Out of
 // memory"; on others it succeeds the first time but the reservation
 // accumulates across reloads until the browser refuses.

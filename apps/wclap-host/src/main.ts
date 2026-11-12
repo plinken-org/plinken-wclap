@@ -10,6 +10,11 @@
 // plugin. Here every plugin lives inside the single chain worklet, so
 // `rewire()` is unnecessary: the audio graph topology is static.
 
+// Cap WebAssembly.Memory maxima before any wasm code runs: the upstream
+// loader and its WASI layer otherwise reserve 2 GB of shared memory each,
+// which Safari on iPad refuses with "RangeError: Out of memory".
+import './wclap-runtime/cap-wasm-memory';
+
 // @ts-expect-error — vendored JS module without types.
 import { getHost, startHost } from '@webclap/wclap-host-js';
 import workletUrl from './wclap-runtime/chain-worklet.mjs?worker&url';

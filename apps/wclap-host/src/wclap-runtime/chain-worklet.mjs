@@ -7,6 +7,9 @@
 //
 // See apps/vocal-host/DESIGN.md for the full architecture.
 
+// The worklet is its own global scope with its own WebAssembly.Memory: the
+// cap applied on the page (see main.ts) has to be applied here as well.
+import './cap-wasm-memory';
 import { getHost, startHost } from '@webclap/wclap-host-js';
 import { hostImports } from './host-imports.mjs';
 import CBOR from './cbor.mjs';
