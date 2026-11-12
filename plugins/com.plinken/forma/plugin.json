@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "id": "com.plinken.forma",
+  "name": "FORMA",
+  "vendor": "Plinken",
+  "version": "0.1.0",
+  "description": "Two-slot synthesizer: each slot is a granular or a spectral-resynthesis engine built from your own sample, blended by fade or ring modulation.",
+  "features": ["instrument", "synthesizer", "sampler"],
+  "license": "MIT",
+  "homepage": "https://plinken.org",
+  "source": "src/",
+  "artifact": "dist/forma.wclap.tar.gz",
+  "format": "tar.gz",
+  "has_ui": true,
+  "ui": {
+    "compact_size": { "width": 320, "height": 110 },
+    "expanded_size": { "width": 980, "height": 520 }
+  },
+  "plugins": [
+    {
+      "id": "com.plinken.forma",
+      "name": "FORMA",
+      "features": ["instrument", "synthesizer", "sampler"],
+      "has_ui": true
+    }
+  ]
+}

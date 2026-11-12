@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FORMA</title>
+<link rel="stylesheet" href="../widgets/widgets.css">
+<style>
+  body { overflow: hidden; user-select: none; -webkit-user-select: none; }
+  .root { width: 100%; height: 100%; display: grid; }
+  .root.expanded { grid-template-rows: auto 1fr; padding: 8px 12px 10px; gap: 8px; }
+  .head { display: flex; align-items: baseline; justify-content: space-between; }
+  .title { font-family: var(--font-display); font-size: 0.82rem; letter-spacing: 0.32em; color: var(--text); }
+  .voices { font-family: var(--font-mono); font-size: 0.62rem; color: var(--text-dim); }
+  .body { display: grid; grid-template-columns: 1fr 212px 1fr; gap: 10px; min-height: 0; }
+  .panel {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 8px 8px 6px; border: 1px solid var(--border-soft); border-radius: 8px; min-width: 0;
+  }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 8px; }
+  .slot-name { font-family: var(--font-display); font-size: 0.9rem; color: var(--accent); width: 18px; }
+  .slot[data-slot="1"] .slot-name { color: var(--accent-purple); }
+  .src-actions { display: flex; gap: 4px; }
+  .btn {
+    font-family: var(--font-display); font-size: 0.5rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--text-muted); background: var(--bg-deep); border: 1px solid var(--border-soft);
+    border-radius: 3px; padding: 4px 7px; cursor: pointer;
+  }
+  .btn:hover { color: var(--text); border-color: var(--accent); }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .iris-wrap { position: relative; width: 188px; height: 188px; flex: none; }
+  .iris { width: 188px; height: 188px; display: block; border-radius: 50%; cursor: crosshair; touch-action: none; }
+  .iris-wrap.drop .iris { outline: 2px dashed var(--accent); outline-offset: 2px; }
+  .iris-info {
+    position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    pointer-events: none; font-family: var(--font-mono); font-size: 0.62rem; color: var(--text-muted); gap: 1px;
+  }
+  .iris-info .big { font-family: var(--font-display); font-size: 0.74rem; color: var(--text); }
+  .iris-info > div { max-width: 78px; text-align: center; line-height: 1.15; }
+  .pots { display: flex; align-items: flex-start; justify-content: center; gap: 3px; flex-wrap: nowrap; }
+  .pots > div { width: 46px; display: flex; justify-content: center; }
+  .group-name { font-size: 0.52rem; color: var(--text-dim); letter-spacing: 0.14em; font-family: var(--font-display); }
+  .engine-row { display: flex; align-items: flex-start; justify-content: center; gap: 3px; }
+  .engine-row > div { width: 46px; display: flex; justify-content: center; }
+  .engine-row.toggles { gap: 22px; }
+  .engine-row.toggles > div { width: auto; }
+  .slot[data-engine="0"] .spectral-only, .slot[data-engine="1"] .grain-only { display: none; }
+  .gen { display: none; width: 100%; gap: 4px; }
+  .root.can-generate .gen { display: flex; }
+  .gen input {
+    flex: 1; min-width: 0; background: var(--bg-deep); color: var(--text); border: 1px solid var(--border-soft);
+    border-radius: 3px; font-family: var(--font-mono); font-size: 0.66rem; padding: 3px 6px;
+  }
+  .centre { justify-content: space-between; }
+  .centre .pots { flex-wrap: wrap; row-gap: 6px; }
+  .slot, .centre { --pot-size: 38px; --pot-track: 3px; }
+  .centre .fade { --pot-size: 64px; --pot-track: 4px; }
+
+  /* Compact strip (the host sizes the iframe to plugin.json compact_size
+     and does not scale it): only Fade, Cutoff and Volume. */
+  .root.compact { padding: 4px 8px; }
+  .root.compact .head, .root.compact .slot, .root.compact .hide-compact { display: none; }
+  .root.compact .body { grid-template-columns: 1fr; height: 100%; }
+  .root.compact .centre { flex-direction: row; justify-content: center; align-items: center; border: none; padding: 0; gap: 18px; }
+  .root.compact .centre, .root.compact .centre .fade { --pot-size: 46px; }
+  .root.compact .centre .pots { flex-wrap: nowrap; }
+  .root.compact .centre .pots > div:not(.compact-show) { display: none; }
+</style>
+</head>
+<body>
+<div class="root expanded" id="root">
+  <div class="head">
+    <div class="title">FORMA</div>
+    <div class="voices" id="voices"></div>
+  </div>
+  <div class="body">
+    <div class="panel slot" data-slot="0" data-engine="0"></div>
+    <div class="panel centre">
+      <div class="group-name hide-compact">MIX</div>
+      <div class="pots fade"><div id="g-fade" class="compact-show"></div></div>
+      <div class="hide-compact" id="g-mixmode"></div>
+      <div class="group-name hide-compact">FILTER</div>
+      <div class="hide-compact" id="g-fmode"></div>
+      <div class="pots"><div id="g-cutoff" class="compact-show"></div><div id="g-res"></div></div>
+      <div class="group-name hide-compact">ENVELOPE</div>
+      <div class="pots hide-compact">
+        <div id="g-a"></div><div id="g-d"></div><div id="g-s"></div><div id="g-r"></div>
+      </div>
+      <div class="group-name hide-compact">OUT</div>
+      <div class="pots"><div id="g-vel"></div><div id="g-vol" class="compact-show"></div></div>
+    </div>
+    <div class="panel slot" data-slot="1" data-engine="1"></div>
+  </div>
+</div>
+
+<template id="slot-template">
+  <div class="panel-head">
+    <div class="slot-name"></div>
+    <div data-w="engine"></div>
+    <div class="src-actions">
+      <button class="btn" data-act="load" title="Load a sample (or drop one on the ring)">Load</button>
+      <button class="btn" data-act="reset" title="Back to the factory source">Reset</button>
+    </div>
+  </div>
+  <div class="gen">
+    <input type="text" maxlength="200" placeholder="Describe a sound to generate…" data-gen="prompt">
+    <button class="btn" data-act="generate">Generate</button>
+  </div>
+  <div class="iris-wrap">
+    <canvas class="iris"></canvas>
+    <div class="iris-info"><div class="big" data-info="main"></div><div data-info="sub"></div></div>
+  </div>
+  <div class="pots">
+    <div data-w="level"></div><div data-w="tune"></div><div data-w="position"></div><div data-w="scan"></div>
+    <div data-w="spread"></div><div data-w="width"></div><div data-w="balance"></div>
+  </div>
+  <div class="group-name grain-only">GRAIN</div>
+  <div class="engine-row grain-only">
+    <div data-w="g-rate"></div><div data-w="g-size"></div><div data-w="g-shape"></div><div data-w="g-pitch"></div>
+    <div data-w="g-scatter"></div><div data-w="g-jitter"></div>
+  </div>
+  <div class="engine-row toggles grain-only">
+    <div data-w="g-track"></div><div data-w="g-keypitch"></div>
+  </div>
+  <div class="group-name spectral-only">SPECTRAL</div>
+  <div class="engine-row spectral-only">
+    <div data-w="s-pure"></div><div data-w="s-warp"></div><div data-w="s-fm"></div><div data-w="s-ratio"></div>
+    <div data-w="s-smooth"></div><div data-w="s-tilt"></div>
+  </div>
+  <input type="file" accept=".wav,.mp3,.aac,.flac,.ogg,.m4a,.aiff,.aif" hidden>
+</template>
+
+<script type="module">
+  import { Pot } from '../widgets/pot.mjs';
+  import { Toggle } from '../widgets/toggle.mjs';
+  import { Segment } from '../widgets/segment.mjs';
+  import { Transport } from '../widgets/transport.mjs';
+
+  // Param ids — must match plugins/com.plinken/forma/src/params.rs.
+  const G = { VOLUME: 0, FADE: 1, MIX_MODE: 2, F_CUTOFF: 3, F_RES: 4, F_MODE: 5, ENV_A: 6, ENV_D: 7, ENV_S: 8, ENV_R: 9, VEL: 10 };
+  const SLOT_BASE = [100, 200];
+  const S = {
+    ENGINE: 0, LEVEL: 1, TUNE: 2, POSITION: 3, SCAN: 4, WIDTH: 5, BALANCE: 6, SPREAD: 7,
+    G_RATE: 8, G_TRACK: 9, G_SIZE: 10, G_SHAPE: 11, G_PITCH: 12, G_SCATTER: 13, G_JITTER: 14,
+    S_PURE: 15, S_WARP: 16, S_FM: 17, S_RATIO: 18, S_SMOOTH: 19, S_TILT: 20, G_KEYPITCH: 21,
+  };
+  // Must match analysis.rs: the plugin keeps at most this much per slot.
+  const MAX_SOURCE_SECONDS = 20;
+  const OVERVIEW_POINTS = 128;
+  const LAYERS = 4;
+
+  const transport = new Transport();
+  const el = (id) => document.getElementById(id);
+  const root = el('root');
+  const widgets = new Map();
+  const add = (w) => { widgets.set(w.id, w); w.onChange((v, id) => transport.sendSet(id, v)); return w; };
+
+  const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const pct = (v) => `${Math.round(v * 100)}%`;
+  const hz = (v) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)}`);
+  const sec = (v) => (v < 1 ? `${Math.round(v * 1000)}ms` : `${v.toFixed(2)}s`);
+  const st = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}st`;
+  const oct = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}oct`;
+  const mult = (v) => `${v.toFixed(2)}x`;
+  const bal = (v) => (Math.abs(v) < 0.01 ? 'C' : v < 0 ? `L${Math.round(-v * 100)}` : `R${Math.round(v * 100)}`);
+  const noteOf = (f) => {
+    const n = Math.round(69 + 12 * Math.log2(f / 440));
+    return `${NOTE_NAMES[((n % 12) + 12) % 12]}${Math.floor(n / 12) - 1}`;
+  };
+
+  // ---- centre column ------------------------------------------------------
+  add(new Pot(el('g-fade'), { id: G.FADE, min: 0, max: 1, default: 0.5, label: 'A · B', format: (v) => (v < 0.495 ? `A ${Math.round((1 - v) * 100)}` : v > 0.505 ? `B ${Math.round(v * 100)}` : 'A=B') }));
+  add(new Segment(el('g-mixmode'), { id: G.MIX_MODE, options: ['Fade', 'Ring'], default: 0 }));
+  add(new Segment(el('g-fmode'), { id: G.F_MODE, options: ['LP', 'BP', 'HP'], default: 0 }));
+  add(new Pot(el('g-cutoff'), { id: G.F_CUTOFF, min: 20, max: 20000, default: 20000, log: true, label: 'Cutoff', format: hz }));
+  add(new Pot(el('g-res'), { id: G.F_RES, min: 0, max: 1, default: 0, label: 'Res', format: pct }));
+  add(new Pot(el('g-a'), { id: G.ENV_A, min: 0.001, max: 8, default: 0.01, log: true, label: 'A', format: sec }));
+  add(new Pot(el('g-d'), { id: G.ENV_D, min: 0.001, max: 8, default: 0.3, log: true, label: 'D', format: sec }));
+  add(new Pot(el('g-s'), { id: G.ENV_S, min: 0, max: 1, default: 0.8, label: 'S', format: pct }));
+  add(new Pot(el('g-r'), { id: G.ENV_R, min: 0.001, max: 8, default: 0.4, log: true, label: 'R', format: sec }));
+  add(new Pot(el('g-vel'), { id: G.VEL, min: 0, max: 1, default: 0.5, label: 'Vel', format: pct }));
+  add(new Pot(el('g-vol'), { id: G.VOLUME, min: 0, max: 1, default: 0.7, label: 'Vol', format: pct }));
+
+  // ---- slots --------------------------------------------------------------
+  // What the plugin last told us about each slot (see lib.rs `overview`).
+  const slots = [0, 1].map(() => ({
+    status: 0, progress: 0, pitched: false, imported: false, rootHz: 0, seconds: 0,
+    peaks: new Uint8Array(OVERVIEW_POINTS), env: new Uint8Array(OVERVIEW_POINTS * LAYERS),
+    playhead: 0, position: 0.1, busy: '',
+  }));
+  let activeVoices = 0;
+
+  const slotEls = [...document.querySelectorAll('.slot')];
+  slotEls.forEach((panel, index) => {
+    const base = SLOT_BASE[index];
+    panel.appendChild(el('slot-template').content.cloneNode(true));
+    panel.querySelector('.slot-name').textContent = 'AB'[index];
+    const at = (name) => panel.querySelector(`[data-w="${name}"]`);
+    const pot = (name, off, cfg) => add(new Pot(at(name), { id: base + off, ...cfg }));
+
+    const engine = add(new Segment(at('engine'), { id: base + S.ENGINE, options: ['Grain', 'Spectral'], default: index }));
+    const showEngine = (v) => { panel.dataset.engine = String(Math.round(v)); };
+    engine.onChange(showEngine);
+    // Host-driven changes must switch the visible control row too.
+    const fromHost = engine.setValueFromHost.bind(engine);
+    engine.setValueFromHost = (v) => { fromHost(v); showEngine(v); };
+
+    pot('level', S.LEVEL, { min: 0, max: 1, default: 0.8, label: 'Level', format: pct });
+    pot('tune', S.TUNE, { min: -24, max: 24, default: 0, label: 'Tune', format: st });
+    const position = pot('position', S.POSITION, { min: 0, max: 1, default: 0.1, label: 'Pos', format: pct });
+    position.onChange((v) => { slots[index].position = v; });
+    const posFromHost = position.setValueFromHost.bind(position);
+    position.setValueFromHost = (v) => { posFromHost(v); slots[index].position = v; };
+    pot('scan', S.SCAN, { min: -2, max: 2, default: 0, label: 'Scan', format: mult });
+    pot('spread', S.SPREAD, { min: 0, max: 1, default: 0.5, label: 'Spread', format: pct });
+    pot('width', S.WIDTH, { min: 0, max: 2, default: index ? 1.5 : 0.25, label: 'Width', format: pct });
+    pot('balance', S.BALANCE, { min: -1, max: 1, default: 0, label: 'Bal', format: bal });
+    pot('g-rate', S.G_RATE, { min: -8, max: 2, default: 0, label: 'Rate', format: oct });
+    pot('g-size', S.G_SIZE, { min: 0.25, max: 16, default: 2, log: true, label: 'Size', format: mult });
+    pot('g-shape', S.G_SHAPE, { min: 0, max: 1, default: 0.5, label: 'Shape', format: pct });
+    pot('g-pitch', S.G_PITCH, { min: -24, max: 24, default: 0, label: 'Pitch', format: st });
+    pot('g-scatter', S.G_SCATTER, { min: 0, max: 1, default: 0, label: 'Scatter', format: pct });
+    pot('g-jitter', S.G_JITTER, { min: 0, max: 1, default: 0, label: 'Jitter', format: pct });
+    add(new Toggle(at('g-track'), { id: base + S.G_TRACK, default: 1, label: 'Rate follows key' }));
+    add(new Toggle(at('g-keypitch'), { id: base + S.G_KEYPITCH, default: 0, label: 'Pitch follows key' }));
+    pot('s-pure', S.S_PURE, { min: 0, max: 1, default: 0, label: 'Pure', format: pct });
+    pot('s-warp', S.S_WARP, { min: 0, max: 1, default: 0, label: 'Warp', format: pct });
+    pot('s-fm', S.S_FM, { min: 0, max: 1, default: 0, label: 'FM', format: pct });
+    pot('s-ratio', S.S_RATIO, { min: 0.5, max: 8, default: 2, label: 'Ratio', format: (v) => v.toFixed(2) });
+    pot('s-smooth', S.S_SMOOTH, { min: 0, max: 1, default: 0, label: 'Smooth', format: pct });
+    pot('s-tilt', S.S_TILT, { min: -1, max: 1, default: 0, label: 'Tilt', format: (v) => (Math.abs(v) < 0.01 ? '—' : v < 0 ? `dark ${Math.round(-v * 100)}` : `bright ${Math.round(v * 100)}`) });
+
+    // -- source import ------------------------------------------------------
+    const fileInput = panel.querySelector('input[type=file]');
+    const wrap = panel.querySelector('.iris-wrap');
+    panel.querySelector('[data-act="load"]').addEventListener('click', () => fileInput.click());
+    panel.querySelector('[data-act="reset"]').addEventListener('click', () => clearSource(index));
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files[0]) importFile(index, fileInput.files[0]);
+      fileInput.value = '';
+    });
+    wrap.addEventListener('dragover', (e) => { e.preventDefault(); wrap.classList.add('drop'); });
+    wrap.addEventListener('dragleave', () => wrap.classList.remove('drop'));
+    wrap.addEventListener('drop', (e) => {
+      e.preventDefault();
+      wrap.classList.remove('drop');
+      const file = e.dataTransfer?.files?.[0];
+      if (file) importFile(index, file);
+    });
+
+    // -- generated sources (only when the host says it can) -----------------
+    const prompt = panel.querySelector('[data-gen="prompt"]');
+    const generate = () => {
+      const text = prompt.value.trim();
+      if (!text) return;
+      slots[index].busy = 'GENERATING';
+      window.parent.postMessage({ type: 'plinken:generate-source', plugin: 'com.plinken.forma', slot: index, prompt: text }, '*');
+    };
+    panel.querySelector('[data-act="generate"]').addEventListener('click', generate);
+    prompt.addEventListener('keydown', (e) => { if (e.key === 'Enter') generate(); });
+
+    // -- the ring: drag to set Position --------------------------------------
+    const canvas = panel.querySelector('.iris');
+    const setFromPointer = (e) => {
+      const r = canvas.getBoundingClientRect();
+      const a = Math.atan2(e.clientX - (r.left + r.width / 2), -(e.clientY - (r.top + r.height / 2)));
+      const v = ((a / (2 * Math.PI)) + 1) % 1;
+      position.setValue(v);
+      slots[index].position = v;
+      transport.sendSet(position.id, v);
+    };
+    canvas.addEventListener('pointerdown', (e) => { canvas.setPointerCapture(e.pointerId); setFromPointer(e); });
+    canvas.addEventListener('pointermove', (e) => { if (canvas.hasPointerCapture(e.pointerId)) setFromPointer(e); });
+  });
+
+  // ---- sample transfer (PLSP — layout must match crates/sample-core) ------
+  let decodeCtx = null;
+  async function decode(arrayBuffer) {
+    // An offline context decodes without needing a user gesture.
+    decodeCtx ??= new OfflineAudioContext(1, 1, 48000);
+    return decodeCtx.decodeAudioData(arrayBuffer);
+  }
+
+  async function importFile(slot, file) {
+    slots[slot].busy = 'DECODING';
+    try {
+      importAudio(slot, await decode(await file.arrayBuffer()));
+    } catch (err) {
+      console.warn('[forma] could not decode', file.name, err);
+      slots[slot].busy = 'NOT AUDIO';
+      setTimeout(() => { if (slots[slot].busy === 'NOT AUDIO') slots[slot].busy = ''; }, 1800);
+    }
+  }
+
+  function importAudio(slot, audioBuffer) {
+    // The plugin plays mono sources; mix down here so no more than needed
+    // crosses into the audio thread.
+    const frames = Math.min(audioBuffer.length, Math.floor(MAX_SOURCE_SECONDS * audioBuffer.sampleRate));
+    const mono = new Float32Array(frames);
+    const n = audioBuffer.numberOfChannels;
+    for (let c = 0; c < n; c++) {
+      const ch = audioBuffer.getChannelData(c);
+      for (let i = 0; i < frames; i++) mono[i] += ch[i] / n;
+    }
+    const rate = Math.round(audioBuffer.sampleRate);
+    const CHUNK = 48000;
+    for (let start = 0; start < frames; start += CHUNK) {
+      sendChunk(slot, rate, frames, start, mono.subarray(start, Math.min(frames, start + CHUNK)));
+    }
+    slots[slot].busy = '';
+  }
+
+  function clearSource(slot) {
+    sendChunk(slot, 48000, 0, 0, new Float32Array(0));
+  }
+
+  function sendChunk(slot, rate, totalFrames, start, pcm) {
+    const payloadLen = 32 + pcm.length * 4;
+    const out = new ArrayBuffer(10 + payloadLen);
+    const dv = new DataView(out);
+    new Uint8Array(out).set([0xa1, 0x63, 0x73, 0x6d, 0x70, 0x5a], 0); // {"smp": bytes(
+    dv.setUint32(6, payloadLen, false);
+    dv.setUint32(10, 0x504c5350, true); // "PLSP"
+    dv.setUint32(14, 1, true);          // version
+    dv.setUint32(18, slot, true);
+    dv.setUint32(22, rate, true);
+    dv.setUint32(26, 1, true);          // channels
+    dv.setUint32(30, totalFrames, true);
+    dv.setUint32(34, start, true);
+    dv.setUint32(38, pcm.length, true);
+    // PCM starts at byte 42, which is not 4-aligned: copy bytes.
+    new Uint8Array(out, 42).set(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.length * 4));
+    window.parent.postMessage(out, '*');
+  }
+
+  // ---- plugin → UI ----------------------------------------------------------
+  transport.onSnapshot((params) => {
+    for (const [id, value] of params) widgets.get(id)?.setValueFromHost(value);
+  });
+
+  // FORMA's own message: CBOR {"forma": bytes}. See lib.rs.
+  const FORMA_PREFIX = [0xa1, 0x65, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x59];
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (data instanceof ArrayBuffer) {
+      const u8 = new Uint8Array(data);
+      if (u8.length < 11 || FORMA_PREFIX.some((b, i) => u8[i] !== b)) return;
+      const p = u8.subarray(10);
+      if (p[0] === 1 && p.length >= 13 + OVERVIEW_POINTS * (1 + LAYERS)) {
+        const s = slots[p[1]];
+        if (!s) return;
+        const dv = new DataView(data, 10);
+        s.status = p[2];
+        s.progress = p[3];
+        s.pitched = (p[4] & 1) !== 0;
+        s.imported = (p[4] & 2) !== 0;
+        s.rootHz = dv.getFloat32(5, true);
+        s.seconds = dv.getFloat32(9, true);
+        s.peaks = p.slice(13, 13 + OVERVIEW_POINTS);
+        s.env = p.slice(13 + OVERVIEW_POINTS, 13 + OVERVIEW_POINTS * (1 + LAYERS));
+      } else if (p[0] === 2 && p.length >= 6) {
+        slots[0].playhead = p[1] / 255;
+        slots[1].playhead = p[2] / 255;
+        activeVoices = p[3];
+        slots[0].progress = p[4];
+        slots[1].progress = p[5];
+      }
+      return;
+    }
+    // Host capability: generating a source from a text prompt. Documented in
+    // the plugin README; a host that does not announce it never sees the UI.
+    if (data && typeof data === 'object') {
+      if (data.type === 'plinken:capabilities') root.classList.toggle('can-generate', !!data.generateSource);
+      if (data.type === 'plinken:generated-source' && slots[data.slot]) {
+        if (data.audio instanceof ArrayBuffer) {
+          decode(data.audio).then((buf) => importAudio(data.slot, buf)).catch(() => { slots[data.slot].busy = ''; });
+        } else {
+          slots[data.slot].busy = '';
+        }
+      }
+    }
+  });
+
+  transport.sendReady();
+  // Ask for the slot pictures (the scaffold answers "ready" with params only).
+  Promise.resolve().then(() => {
+    window.parent.postMessage(new Uint8Array([0x66, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x3f]).buffer, '*');
+    window.parent.postMessage({ type: 'plinken:capabilities?', plugin: 'com.plinken.forma' }, '*');
+  });
+
+  // ---- drawing --------------------------------------------------------------
+  const css = getComputedStyle(document.documentElement);
+  const color = (name) => css.getPropertyValue(name).trim();
+  const LAYER_COLORS = ['#4b4f8f', '#6773be', '#8691da', '#c3c9f2'];
+
+  function drawIris(panel, s, index) {
+    const canvas = panel.querySelector('.iris');
+    const size = canvas.clientWidth;
+    if (!size) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== Math.round(size * dpr)) {
+      canvas.width = canvas.height = Math.round(size * dpr);
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, size, size);
+    const c = size / 2;
+    const R = c - 2;
+    ctx.fillStyle = color('--bg-deep');
+    ctx.beginPath(); ctx.arc(c, c, R, 0, Math.PI * 2); ctx.fill();
+
+    // The source is drawn as a loop: start and end meet at 12 o'clock.
+    const angle = (i) => (i / OVERVIEW_POINTS) * Math.PI * 2 - Math.PI / 2;
+    const band = (inner, outer, values, offset, fill) => {
+      ctx.beginPath();
+      for (let i = 0; i <= OVERVIEW_POINTS; i++) {
+        const v = values[offset + (i % OVERVIEW_POINTS)] / 255;
+        const r = inner + (outer - inner) * v;
+        ctx.lineTo(c + r * Math.cos(angle(i)), c + r * Math.sin(angle(i)));
+      }
+      for (let i = OVERVIEW_POINTS; i >= 0; i--) ctx.lineTo(c + inner * Math.cos(angle(i)), c + inner * Math.sin(angle(i)));
+      ctx.closePath();
+      ctx.fillStyle = fill;
+      ctx.fill();
+    };
+    if (s.status === 2) {
+      // Four layer envelopes, dark (inner) → bright (outer), then the level ring.
+      const r0 = R * 0.45, step = R * 0.082;
+      for (let k = 0; k < LAYERS; k++) band(r0 + k * step, r0 + (k + 1) * step - 1, s.env, k * OVERVIEW_POINTS, LAYER_COLORS[k]);
+      band(R * 0.8, R * 0.99, s.peaks, 0, index ? color('--accent-purple') : color('--accent'));
+    } else {
+      ctx.strokeStyle = color('--accent');
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(c, c, R * 0.88, -Math.PI / 2, -Math.PI / 2 + (s.progress / 100) * Math.PI * 2);
+      ctx.stroke();
+    }
+    // Playhead: where the newest voice is reading, or the Position knob.
+    const pos = activeVoices > 0 ? s.playhead : s.position;
+    const a = pos * Math.PI * 2 - Math.PI / 2;
+    ctx.strokeStyle = '#59d6c4';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(c + R * 0.45 * Math.cos(a), c + R * 0.45 * Math.sin(a));
+    ctx.lineTo(c + R * Math.cos(a), c + R * Math.sin(a));
+    ctx.stroke();
+
+    const main = panel.querySelector('[data-info="main"]');
+    const sub = panel.querySelector('[data-info="sub"]');
+    const text = s.busy ? [s.busy, ''] : s.status !== 2 ? ['ANALYSING', `${s.progress}%`]
+      : [s.pitched ? noteOf(s.rootHz) : '~', `${s.seconds.toFixed(1)}s${s.imported ? '' : ' factory'}`];
+    if (main.textContent !== text[0]) main.textContent = text[0];
+    if (sub.textContent !== text[1]) sub.textContent = text[1];
+  }
+
+  function frame() {
+    if (!root.classList.contains('compact')) {
+      slotEls.forEach((panel, i) => drawIris(panel, slots[i], i));
+      const v = activeVoices ? `${activeVoices} voice${activeVoices === 1 ? '' : 's'}` : '';
+      if (el('voices').textContent !== v) el('voices').textContent = v;
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // Layout probe: the host sizes the iframe to compact_size or expanded_size
+  // (plugin.json) and passes no mode flag.
+  const COMPACT_MAX_WIDTH = 600;
+  const applyLayout = () => {
+    const compact = window.innerWidth <= COMPACT_MAX_WIDTH;
+    root.classList.toggle('compact', compact);
+    root.classList.toggle('expanded', !compact);
+  };
+  applyLayout();
+  window.addEventListener('resize', applyLayout);
+</script>
+</body>
+</html>

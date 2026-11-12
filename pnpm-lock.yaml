@@ -80,6 +80,10 @@ importers:
 
   plugins/com.plinken/eq: {}
 
+  plugins/com.plinken/esscape: {}
+
+  plugins/com.plinken/forma: {}
+
   plugins/com.plinken/organ: {}
 
   plugins/com.plinken/piano: {}

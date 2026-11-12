@@ -1,0 +1,11 @@
+{
+  "name": "@plinken/forma",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "FORMA WCLAP synthesizer — granular + spectral resynthesis (com.plinken)",
+  "scripts": {
+    "build:wasm": "cargo build -p com-plinken-forma --target wasm32-unknown-unknown --release && mkdir -p dist && cp ../../../target/wasm32-unknown-unknown/release/com_plinken_forma.wasm dist/forma.wclap.wasm",
+    "build": "pnpm run build:wasm && node ../../../scripts/bundle-wclap.mjs ."
+  }
+}
