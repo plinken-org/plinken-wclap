@@ -37,6 +37,16 @@ import {
 const NUM_SLOTS = 5;
 const SHELF_DT_TYPE = 'application/x-plinken-shelf-id';
 const PROXY_PREFIX = '/plugin-proxy';
+/** Cache Storage bucket the proxy SW serves plugin UI files from. Must
+ *  match `CACHE_NAME` in public/plugin-proxy-sw.js. */
+const PROXY_CACHE = 'plugin-proxy-files';
+// Same isolation headers the SW puts on relayed responses: the host page is
+// COEP=require-corp, so an iframe document without them is blocked.
+const PROXY_FILE_HEADERS = {
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'X-Plugin-Proxy': 'cache'
+};
 /** Tone-source gain when active. 10^(-10/20) ≈ -10 dBFS peak into the chain. */
 const TONE_LEVEL_GAIN = 0.31623;
 
@@ -1316,9 +1326,16 @@ async function openPluginUi(idx: number, mode: PanelMode = 'expanded'): Promise<
     return null;
   });
 
+  // Put the bundle's files where the proxy SW can read them directly
+  // (Cache Storage is shared between the page and the worker). The SW
+  // asks the page by message only for paths it does not find there; on
+  // Safari that message relay left every panel blank.
+  await cachePluginFiles(files, pluginPath, uiKey);
+
   const iframe = document.createElement('iframe');
   iframe.src = PROXY_PREFIX + uiKey;
   iframe.title = slot.label;
+  iframe.addEventListener('load', () => void reportPanelLoad(idx, iframe, uiKey));
 
   slot.iframe = iframe;
   iframeBridge?.register(idx, iframe);
@@ -1329,6 +1346,72 @@ async function openPluginUi(idx: number, mode: PanelMode = 'expanded'): Promise<
   openPanels.set(idx, panel);
   positionPanel(panel);
   wirePanelDrag(panel);
+}
+
+/** Every request path the iframe may use for bundle file `key` — the same
+ *  forms the message resolver accepts (see `proxyResolvers` above). */
+function proxyPathsFor(key: string, pluginPath: string, uiKey: string): string[] {
+  const paths = [key];
+  if (pluginPath && key.startsWith(pluginPath + '/')) paths.push(key.slice(pluginPath.length));
+  // A second instance's webview URI carries a `-copy-<hex>` suffix on the
+  // plugin folder; its relative imports inherit it.
+  const copy = /^(\/plugin\/[^/]+?)(-copy-[0-9a-f]+)\//i.exec(uiKey);
+  if (copy && key.startsWith(copy[1] + '/')) paths.push(copy[1] + copy[2] + key.slice(copy[1].length));
+  return paths;
+}
+
+async function cachePluginFiles(
+  files: Record<string, ArrayBuffer>,
+  pluginPath: string,
+  uiKey: string
+): Promise<void> {
+  if (!('caches' in window)) return;
+  try {
+    const cache = await caches.open(PROXY_CACHE);
+    const puts: Promise<void>[] = [];
+    for (const [key, bytes] of Object.entries(files)) {
+      // The wasm itself is never fetched by the UI; keep it out of the cache.
+      if (!bytes || key.endsWith('.wasm')) continue;
+      for (const path of proxyPathsFor(key, pluginPath, uiKey)) {
+        const url = PROXY_PREFIX + (path.startsWith('/') ? path : '/' + path);
+        puts.push(
+          cache.put(
+            url,
+            new Response(bytes.slice(0), {
+              headers: { 'Content-Type': mimeForPath(path), ...PROXY_FILE_HEADERS }
+            })
+          )
+        );
+      }
+    }
+    await Promise.all(puts);
+  } catch (err) {
+    // The message relay still serves the files where it works.
+    console.warn('[wclap-host] could not cache plugin UI files', err);
+  }
+}
+
+/** After a panel's iframe loads, check it actually got the plugin's page.
+ *  A failure is shown in the status line with what the proxy answered, so
+ *  it can be read off a device that has no dev tools (an iPad). */
+async function reportPanelLoad(idx: number, iframe: HTMLIFrameElement, uiKey: string): Promise<void> {
+  let detail: string;
+  try {
+    const doc = iframe.contentDocument;
+    const text = (doc?.body?.textContent ?? '').trim();
+    if (doc && !text.startsWith('plugin-proxy:') && (doc.body?.children.length ?? 0) > 0) return;
+    detail = text ? `"${text.slice(0, 60)}"` : 'empty document';
+  } catch (err) {
+    detail = `unreadable (${(err as Error).message})`;
+  }
+  const reg = await navigator.serviceWorker?.getRegistration(PROXY_PREFIX + '/').catch(() => undefined);
+  const sw = reg?.active?.state ?? (reg ? 'not active' : 'not registered');
+  let cached = 'no Cache Storage';
+  if ('caches' in window) {
+    const hit = await caches.open(PROXY_CACHE).then((c) => c.match(PROXY_PREFIX + uiKey)).catch(() => undefined);
+    cached = hit ? 'file cached' : 'file not cached';
+  }
+  showError(ui, `Slot ${idx + 1}: the plugin UI did not load — ${detail} · worker ${sw} · ${cached}`);
 }
 
 function buildPluginPanel(
@@ -1559,6 +1642,8 @@ function wirePanelDrag(panel: HTMLElement): void {
 
 async function registerPluginProxy(): Promise<void> {
   if (!('serviceWorker' in navigator)) return;
+  // Files cached for a previous visit's plugins are of no use to this one.
+  if ('caches' in window) await caches.delete(PROXY_CACHE).catch(() => false);
   try {
     const reg = await navigator.serviceWorker.register('/plugin-proxy-sw.js', {
       scope: '/plugin-proxy/'

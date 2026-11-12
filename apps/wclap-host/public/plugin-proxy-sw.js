@@ -23,7 +23,25 @@ self.addEventListener('fetch', (event) => {
   }
 });
 
+// The page stores each open plugin's UI files here before it creates the
+// iframe (see `cachePluginFiles` in src/main.ts). Reading them from Cache
+// Storage needs no round trip to the page, so it works where messaging an
+// uncontrolled client does not.
+const CACHE_NAME = 'plugin-proxy-files';
+
+async function fromCache(url) {
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    return await cache.match(url.origin + url.pathname);
+  } catch {
+    return undefined;
+  }
+}
+
 async function handle(event, innerPath) {
+  const cached = await fromCache(new URL(event.request.url));
+  if (cached) return cached;
+
   // The fetch was initiated from inside the iframe (which lives under
   // /plugin-proxy/), but the iframe has no idea where to find the file.
   // Always route the request to the top-level page, which holds the
