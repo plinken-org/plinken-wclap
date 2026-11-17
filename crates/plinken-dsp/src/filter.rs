@@ -57,7 +57,10 @@ impl MoogFilter {
         let lp2 = self.stage[1];
         let lp4 = self.stage[3];
         let bp = self.stage[1] - self.stage[3];
-        let hp = input_sat - self.stage[1] - self.stage[3];
+        // 12 dB/oct high-pass from the first two stages: in − 2·s1 + s2,
+        // which is zero at DC and the input itself far above the cut-off.
+        // (It was `in − s2 − s4`, which passes the lows inverted.)
+        let hp = input_sat - 2.0 * self.stage[0] + self.stage[1];
 
         match (self.mode, self.poles) {
             (0, 0) => lp2, // LP 2-pole
@@ -73,8 +76,32 @@ impl MoogFilter {
 mod tests {
     use super::*;
 
-    /// Lowpass at a low cutoff must attenuate a high-frequency input
-    /// far more than the same input passed at a high cutoff.
+    fn sine_rms(mode: i32, tone_hz: f32, cutoff: f32) -> f32 {
+        let sr = 48000.0;
+        let mut f = MoogFilter::new(sr);
+        f.set_mode(mode);
+        f.set_poles(1);
+        let n = 9600;
+        let mut acc = 0.0f32;
+        for i in 0..n {
+            let x = 0.1 * (i as f32 * tone_hz / sr * 2.0 * PI).sin();
+            let y = f.process(x, cutoff, 0.0);
+            if i >= n / 2 {
+                acc += y * y;
+            }
+        }
+        (acc / (n / 2) as f32).sqrt()
+    }
+
+    #[test]
+    fn highpass_removes_lows_and_passes_highs() {
+        let input = 0.1 / 2f32.sqrt();
+        let low = sine_rms(2, 50.0, 2000.0);
+        let high = sine_rms(2, 12000.0, 500.0);
+        assert!(low < 0.01 * input, "50 Hz through a 2 kHz high-pass: {low}");
+        assert!((0.7..=1.2).contains(&(high / input)), "12 kHz through a 500 Hz high-pass: {high}");
+    }
+
     #[test]
     fn lowpass_attenuates_highs() {
         let sr = 48000.0;
