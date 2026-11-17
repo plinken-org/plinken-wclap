@@ -39,7 +39,10 @@ impl MoogFilter {
     #[inline]
     pub fn process(&mut self, input: f32, cutoff_freq: f32, resonance: f32) -> f32 {
         let f = (cutoff_freq / self.sample_rate).min(0.45);
-        let g = (f * PI).tanh();
+        // Coefficient of a one-pole stage whose corner is the cut-off:
+        // 1 − e^(−2πf). (It was tanh(πf), about half that for low f, which
+        // put the corner an octave below the frequency asked for.)
+        let g = 1.0 - (-2.0 * PI * f).exp();
         let k = resonance * 4.0;
 
         let input_with_feedback = input - k * self.delay;
@@ -91,6 +94,20 @@ mod tests {
             }
         }
         (acc / (n / 2) as f32).sqrt()
+    }
+
+    /// Four one-pole stages each pass 1/√2 at their corner, so a tone at
+    /// the cut-off comes through the 4-pole low-pass at 1/4 (−12 dB).
+    #[test]
+    fn the_corner_is_at_the_cutoff_asked_for() {
+        let input = 0.1 / 2f32.sqrt();
+        for cutoff in [100.0f32, 1000.0, 5000.0] {
+            let at_corner = sine_rms(0, cutoff, cutoff) / input;
+            assert!((0.22..=0.29).contains(&at_corner), "{cutoff} Hz: gain {at_corner} at the corner");
+            // An octave below the corner is nearly through; an octave above is well down.
+            assert!(sine_rms(0, cutoff / 2.0, cutoff) / input > 0.55);
+            assert!(sine_rms(0, cutoff * 2.0, cutoff) / input < 0.06);
+        }
     }
 
     #[test]
