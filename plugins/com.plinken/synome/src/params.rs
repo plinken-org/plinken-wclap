@@ -2,7 +2,8 @@
 //!
 //! Ported from the private monorepo's `plugins/Synome/src/params.rs`.
 //! **Ids 0–73 are frozen** — they match the shipped `synome.json` UI and
-//! saved PLST state blobs; only append.
+//! saved PLST state blobs; only append. Everything after 73 was appended
+//! here and is frozen the same way once a build has shipped.
 //!
 //! One static table serves both the host's `clap.params` enumeration and
 //! the plugin's own clamping/defaults (wclap `ParamDef` carries
@@ -11,7 +12,7 @@
 use wclap_plugin::{ParamDef, PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED};
 
 /// Total number of parameters.
-pub const PARAM_COUNT: usize = 77;
+pub const PARAM_COUNT: usize = 84;
 
 /// Parameter indices — match synome.json paramId values.
 #[repr(usize)]
@@ -127,7 +128,23 @@ pub enum Param {
     Osc2Mode = 75,
     /// MIDI note at which the loaded sample plays 1:1 (Sample mode).
     SampleRootKey = 76,
+
+    // Wavetable (77-83). In Wavetable mode an oscillator's Shape param
+    // (0 / 13) is the position in its table.
+    /// Index into the factory bank (`plinken_dsp::FACTORY_TABLE_NAMES`).
+    Osc1Wavetable = 77,
+    Osc2Wavetable = 78,
+    /// Depth of position modulation, shared by both oscillators the way
+    /// PitchModAmount is; the four switches route LFO / mod env to it.
+    WtModAmount = 79,
+    Osc1WtModLfo = 80,
+    Osc1WtModEnv = 81,
+    Osc2WtModLfo = 82,
+    Osc2WtModEnv = 83,
 }
+
+/// Highest selectable wavetable index.
+const WT_MAX: f64 = (plinken_dsp::FACTORY_TABLE_NAMES.len() - 1) as f64;
 
 macro_rules! p {
     ($id:expr, $name:literal, $min:expr, $max:expr, $def:expr) => {
@@ -248,6 +265,14 @@ pub static PARAM_DEFS: [ParamDef; PARAM_COUNT] = [
     p!(74, b"osc1_mode\0", 0.0, 4.0, 0.0, stepped),
     p!(75, b"osc2_mode\0", 0.0, 4.0, 0.0, stepped),
     p!(76, b"sample_root_key\0", 0.0, 127.0, 60.0, stepped),
+    // Wavetable
+    p!(77, b"osc1_wavetable\0", 0.0, WT_MAX, 0.0, stepped),
+    p!(78, b"osc2_wavetable\0", 0.0, WT_MAX, 0.0, stepped),
+    p!(79, b"wt_mod_amount\0", -1.0, 1.0, 0.0),
+    p!(80, b"osc1_wt_mod_lfo\0", 0.0, 1.0, 0.0, stepped),
+    p!(81, b"osc1_wt_mod_env\0", 0.0, 1.0, 0.0, stepped),
+    p!(82, b"osc2_wt_mod_lfo\0", 0.0, 1.0, 0.0, stepped),
+    p!(83, b"osc2_wt_mod_env\0", 0.0, 1.0, 0.0, stepped),
 ];
 
 /// Default value for every param slot, as f32 for the DSP array.

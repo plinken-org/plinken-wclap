@@ -9,7 +9,8 @@ next phases add the sample oscillator mode and a `widgets/` UI.
 
 ## What's inside
 
-- 2 oscillators with saw/pulse morphing, FM between them, hard sync
+- 2 oscillators with saw/pulse morphing, FM between them, hard sync; each
+  can instead scan a wavetable or play the loaded sample
 - Moog ladder filter (2/4 pole, LP/BP/HP) with env/LFO/keytrack modulation
 - 3 ADSR envelopes (amp, filter, mod)
 - LFO (5 shapes, onset delay, retrig), vibrato
@@ -30,22 +31,38 @@ engine. The NNUE match-sound feature is not ported yet.
 
 ## TODO
 
-- **Oscillator engines — implement WTbl / Gran / Phys.** The OSC Mode pot
-  offers five engines (`Anlg` / `WTbl` / `Gran` / `Phys` / `Smpl`) but only
-  **Analog** and **Sample** actually work today. Two gaps:
-  1. `crates/plinken-dsp/src/osc.rs` — `Oscillator::process` matches on mode,
-     but `Wavetable`, `Granular` and `Physical` all fall through to
-     `process_analog` (marked `// TODO`). Implement real wavetable scan,
-     granular cloud, and Karplus-Strong physical modelling.
-  2. `src/synth.rs` — the per-voice oscillator's `set_mode` is **never
-     called** (only `== OscMode::Sample` is tested, lines ~376/401/421), so
-     even once the DSP exists the mode must be pushed to `voice.osc1` /
-     `voice.osc2` each block for non-Sample modes.
+- **Oscillator engines — implement Gran / Phys.** The OSC Mode pot offers
+  five engines (`Anlg` / `WTbl` / `Gran` / `Phys` / `Smpl`); **Analog**,
+  **Wavetable** and **Sample** work. `Granular` and `Physical` still fall
+  through to `process_analog` in `crates/plinken-dsp/src/osc.rs` (marked
+  `// TODO`) and sound identical to Analog. Either implement them (granular
+  cloud, Karplus-Strong) or hide those positions from the Mode pot
+  (`ui/index.html` `OSC_MODES` + pot `max`) before shipping.
+- **Wavetable: import and a display.** Only the generated factory bank is
+  selectable. User tables (Serum-style WAV, 2048 samples per frame) need an
+  FFT of the imported cycles into `Spectrum`, a state chunk to carry them,
+  and a picker with a waveform view in the faceplate.
+- **Analog oscillator aliases.** `process_analog` is a naive saw and a fixed
+  50 % pulse; it needs PolyBLEP and a pulse width.
 
-  Until then, selecting WTbl/Gran/Phys sounds identical to Analog. Options if
-  we ship before implementing: hide those positions from the Mode pot
-  (`ui/index.html` `OSC_MODES` + pot `max`) so the UI doesn't advertise
-  engines that don't exist.
+## Wavetable engine
+
+In `WTbl` mode an oscillator scans one of ten factory tables (`Table` pot:
+Basic, PWM, Harm, Reso, Vowel, Sync, FM, Fold, Organ, Glass), 32 frames each.
+`Shape` is the position in the table. `W.LFO` / `W.Env` route the LFO and the
+mod envelope to the position, by the shared `W.Mod` amount (bipolar) — the
+same arrangement as `P.LFO` / `P.Env` / `P.Mod` for pitch.
+
+The tables are computed, not shipped (`plinken-dsp/src/wavetable_factory.rs`):
+each is a recipe evaluated once per module instance, on the first
+`activate`. Every frame is kept as a harmonic series and rendered once per
+octave with the partials above Nyquist left out (`wavetable.rs`), so a
+table does not alias at any pitch (FM and hard sync still can, as on the
+analog engine). The bank takes about 5.5 MB of plugin memory.
+
+A table is saved by its index in `FACTORY_TABLE_NAMES`: append tables, never
+reorder them. The faceplate carries its own copy of the names; a cargo test
+fails if the two lists differ.
 
 ## Build & test
 

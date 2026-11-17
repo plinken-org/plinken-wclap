@@ -1,7 +1,8 @@
 //! Moog-style Synthesizer Engine for Synome
 //!
 //! Features:
-//! - 2 oscillators with saw/pulse morphing and hard sync
+//! - 2 oscillators with saw/pulse morphing and hard sync, each switchable
+//!   to a wavetable (generated factory bank) or the loaded sample
 //! - Moog ladder filter (2/4 pole, LP/BP/HP)
 //! - 3 ADSR envelopes (filter, amp, mod)
 //! - LFO with 5 waveforms
@@ -22,10 +23,22 @@
 use crate::params::{Param, PARAM_COUNT};
 use plinken_dsp::{
     fast_tanh, midi_to_freq, soft_clip, Delay, Envelope, Lfo, ModulationFx, MoogFilter, Noise,
-    OscMode, Oscillator, Reverb,
+    OscMode, Oscillator, Reverb, Smoother, Wavetable, WavetableBank,
 };
 use plinken_sample_core::{LoopMode, SampleData, SampleVoice, VoiceParams};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// The factory wavetables, built once and shared by every engine in this
+/// module instance: the build runs a few thousand FFTs, which belongs in
+/// setup (`Synome::new`, reached from `activate`), never in `process`.
+fn factory_wavetables() -> Arc<WavetableBank> {
+    static BANK: OnceLock<Arc<WavetableBank>> = OnceLock::new();
+    BANK.get_or_init(|| Arc::new(plinken_dsp::factory_bank())).clone()
+}
+
+/// Time for a Shape knob move to settle as wavetable position. A host
+/// sends param changes in steps; unsmoothed they zipper through frames.
+const WT_POSITION_SMOOTH_MS: f32 = 5.0;
 
 pub const MAX_VOICES: usize = 16;
 
@@ -133,6 +146,9 @@ pub struct Synome {
     /// Instrument-wide sample for OscMode::Sample (slot 0 of the PLSP
     /// delivery). Voices read it through per-voice SampleVoice positions.
     sample_slot: Option<Arc<SampleData>>,
+    wavetables: Arc<WavetableBank>,
+    /// Smoothed Shape param per oscillator, read as table position.
+    wt_position: [Smoother; 2],
 }
 
 impl Synome {
@@ -149,7 +165,15 @@ impl Synome {
             sample_rate,
             params: crate::params::default_values(),
             sample_slot: None,
+            wavetables: factory_wavetables(),
+            wt_position: Self::position_smoothers(sample_rate),
         }
+    }
+
+    fn position_smoothers(sample_rate: f32) -> [Smoother; 2] {
+        let defaults = crate::params::default_values();
+        [Param::Osc1Shape, Param::Osc2Shape]
+            .map(|p| Smoother::new(sample_rate, WT_POSITION_SMOOTH_MS, defaults[p as usize]))
     }
 
     /// Install / clear the instrument's sample (OscMode::Sample source).
@@ -167,6 +191,10 @@ impl Synome {
         self.reverb = Reverb::new(sample_rate);
         self.mod_fx = ModulationFx::new(sample_rate);
         self.global_lfo = Lfo::new(sample_rate);
+        self.wt_position = Self::position_smoothers(sample_rate);
+        for (smoother, param) in self.wt_position.iter_mut().zip([Param::Osc1Shape, Param::Osc2Shape]) {
+            smoother.snap(self.params[param as usize]);
+        }
     }
 
     /// Write one param slot. The value must already be clamped to the
@@ -295,9 +323,23 @@ impl Synome {
             .as_ref()
             .map(|s| s.sample_rate as f64 / self.sample_rate as f64);
 
+        // Wavetable setup (constant per block): the table each oscillator
+        // scans, or None when it is in another mode.
+        let table_for = |mode: OscMode, select: Param| -> Option<&Wavetable> {
+            if mode != OscMode::Wavetable {
+                return None;
+            }
+            self.wavetables.get(p[select as usize].round() as usize)
+        };
+        let osc1_table = table_for(osc1_mode, Param::Osc1Wavetable);
+        let osc2_table = table_for(osc2_mode, Param::Osc2Wavetable);
+        let wt_mod_amount = p[Param::WtModAmount as usize];
+
         for i in 0..output_l.len() {
             let lfo_val = self.global_lfo.process();
             let mut sample = 0.0f32;
+            let osc1_position = self.wt_position[0].next(p[Param::Osc1Shape as usize]);
+            let osc2_position = self.wt_position[1].next(p[Param::Osc2Shape as usize]);
 
             for voice in &mut self.voices {
                 if !voice.is_active() {
@@ -357,6 +399,7 @@ impl Synome {
                 }
                 let osc1_freq = base_freq * (2.0f32).powf((osc1_coarse + osc1_fine / 100.0 + osc1_pitch_mod) / 12.0);
                 voice.osc1.set_freq(osc1_freq);
+                voice.osc1.set_mode(osc1_mode);
 
                 // OSC2 frequency with modulation
                 let osc2_coarse = p[Param::Osc2Coarse as usize];
@@ -370,6 +413,21 @@ impl Synome {
                 }
                 let osc2_freq = base_freq * (2.0f32).powf((osc2_coarse + osc2_fine / 100.0 + osc2_pitch_mod) / 12.0);
                 voice.osc2.set_freq(osc2_freq);
+                voice.osc2.set_mode(osc2_mode);
+
+                // Wavetable position: the (smoothed) Shape knob plus LFO /
+                // mod env, per voice so each note's envelope scans its own
+                // way through the table.
+                let position_mod = |lfo_on: Param, env_on: Param| {
+                    let mut m = 0.0;
+                    if p[lfo_on as usize] > 0.5 {
+                        m += lfo;
+                    }
+                    if p[env_on as usize] > 0.5 {
+                        m += mod_env;
+                    }
+                    m * wt_mod_amount
+                };
 
                 // Process OSC2 first (for FM and sync)
                 let osc2_shape = p[Param::Osc2Shape as usize];
@@ -383,6 +441,9 @@ impl Synome {
                     };
                     // A sample reader has no phase wrap → never a sync source.
                     (out, false)
+                } else if let Some(table) = osc2_table {
+                    let position = osc2_position + position_mod(Param::Osc2WtModLfo, Param::Osc2WtModEnv);
+                    voice.osc2.process_wavetable(table, position, 0.0)
                 } else {
                     voice.osc2.process(osc2_shape, 0.0)
                 };
@@ -411,9 +472,11 @@ impl Synome {
                         }
                         None => 0.0,
                     }
+                } else if let Some(table) = osc1_table {
+                    let position = osc1_position + position_mod(Param::Osc1WtModLfo, Param::Osc1WtModEnv);
+                    voice.osc1.process_wavetable(table, position, osc2_out * fm_amount).0
                 } else {
-                    let (o, _) = voice.osc1.process(osc1_shape, osc2_out * fm_amount);
-                    o
+                    voice.osc1.process(osc1_shape, osc2_out * fm_amount).0
                 };
 
                 // Hard sync: OSC2 resets OSC1 (a sample osc1 rewinds).
@@ -612,6 +675,120 @@ mod tests {
         let mut r = [0.0f32; 256];
         s.process(&mut l, &mut r);
         assert!(l.iter().all(|x| x.abs() < 1e-6), "no sample → silence");
+    }
+
+    /// Render one held note with osc 1 alone, after `setup` has set params.
+    fn render_osc1(setup: impl Fn(&mut Synome)) -> Vec<f32> {
+        let mut s = Synome::new(48000.0);
+        s.set_param_value(Param::MixOsc1 as usize, 1.0);
+        setup(&mut s);
+        s.note_on(57, 100);
+        let mut l = vec![0.0f32; 4800];
+        let mut r = vec![0.0f32; 4800];
+        // Let the attack and the position smoother settle, keep the next block.
+        s.process(&mut l, &mut r);
+        s.process(&mut l, &mut r);
+        l
+    }
+
+    fn max_diff(a: &[f32], b: &[f32]) -> f32 {
+        a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max)
+    }
+
+    fn wavetable(table: usize, position: f32) -> impl Fn(&mut Synome) {
+        move |s| {
+            s.set_param_value(Param::Osc1Mode as usize, 1.0);
+            s.set_param_value(Param::Osc1Wavetable as usize, table as f32);
+            s.set_param_value(Param::Osc1Shape as usize, position);
+        }
+    }
+
+    #[test]
+    fn wavetable_mode_is_its_own_engine() {
+        let analog = render_osc1(|_| {});
+        let table = render_osc1(wavetable(0, 0.0));
+        let peak = table.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(peak > 0.01, "wavetable osc audible, peak={peak}");
+        assert!(max_diff(&analog, &table) > 0.02, "wavetable must not be the analog osc");
+    }
+
+    #[test]
+    fn every_factory_table_sounds_and_selecting_one_changes_the_sound() {
+        let renders: Vec<Vec<f32>> = (0..plinken_dsp::FACTORY_TABLE_NAMES.len())
+            .map(|t| render_osc1(wavetable(t, 0.5)))
+            .collect();
+        for (t, a) in renders.iter().enumerate() {
+            let name = plinken_dsp::FACTORY_TABLE_NAMES[t];
+            assert!(a.iter().all(|x| x.is_finite()), "{name} finite");
+            assert!(a.iter().fold(0.0f32, |m, x| m.max(x.abs())) > 0.01, "{name} audible");
+            for (u, b) in renders.iter().enumerate().skip(t + 1) {
+                assert!(max_diff(a, b) > 0.005, "{name} == {}", plinken_dsp::FACTORY_TABLE_NAMES[u]);
+            }
+        }
+    }
+
+    #[test]
+    fn shape_scans_the_table() {
+        let start = render_osc1(wavetable(0, 0.0));
+        let end = render_osc1(wavetable(0, 1.0));
+        assert!(max_diff(&start, &end) > 0.02, "position must change the waveform");
+    }
+
+    #[test]
+    fn mod_env_moves_the_position_only_when_routed() {
+        let base = render_osc1(wavetable(0, 0.0));
+        let amount_only = render_osc1(|s| {
+            wavetable(0, 0.0)(s);
+            s.set_param_value(Param::WtModAmount as usize, 1.0);
+        });
+        assert!(max_diff(&base, &amount_only) < 1e-6, "amount alone routes nothing");
+        let routed = render_osc1(|s| {
+            wavetable(0, 0.0)(s);
+            s.set_param_value(Param::WtModAmount as usize, 1.0);
+            s.set_param_value(Param::Osc1WtModEnv as usize, 1.0);
+        });
+        assert!(max_diff(&base, &routed) > 0.02, "mod env scans the table");
+    }
+
+    #[test]
+    fn osc2_wavetable_plays_and_still_drives_hard_sync() {
+        let render = |sync: f32| {
+            let mut s = Synome::new(48000.0);
+            s.set_param_value(Param::MixOsc1 as usize, 1.0);
+            s.set_param_value(Param::Osc1Coarse as usize, 7.0);
+            s.set_param_value(Param::Osc2Mode as usize, 1.0);
+            s.set_param_value(Param::Osc2Wavetable as usize, 5.0);
+            s.set_param_value(Param::Osc2Sync as usize, sync);
+            s.note_on(57, 100);
+            let mut l = vec![0.0f32; 4800];
+            let mut r = vec![0.0f32; 4800];
+            s.process(&mut l, &mut r);
+            l
+        };
+        assert!(max_diff(&render(0.0), &render(1.0)) > 0.02, "a wavetable osc2 is a sync source");
+
+        let mut s = Synome::new(48000.0);
+        s.set_param_value(Param::MixOsc1 as usize, 0.0);
+        s.set_param_value(Param::MixOsc2 as usize, 1.0);
+        s.set_param_value(Param::Osc2Mode as usize, 1.0);
+        s.note_on(57, 100);
+        let mut l = vec![0.0f32; 4800];
+        let mut r = vec![0.0f32; 4800];
+        s.process(&mut l, &mut r);
+        assert!(l.iter().fold(0.0f32, |m, x| m.max(x.abs())) > 0.01, "osc2 wavetable audible");
+    }
+
+    /// The faceplate is static HTML and cannot ask the plugin for names,
+    /// so it carries its own copy of the list. Keep the two in step.
+    #[test]
+    fn faceplate_lists_the_factory_tables_in_bank_order() {
+        let ui = include_str!("../ui/index.html");
+        let list = plinken_dsp::FACTORY_TABLE_NAMES
+            .iter()
+            .map(|n| format!("'{n}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert!(ui.contains(&format!("const WAVETABLES = [{list}];")), "ui/index.html WAVETABLES != {list}");
     }
 
     #[test]

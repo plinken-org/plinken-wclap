@@ -10,6 +10,7 @@
 //!
 //! Contents:
 //! - oscillator with saw/pulse morphing, FM input and hard sync
+//! - band-limited wavetables and a generated factory set
 //! - Moog ladder filter (2/4 pole, LP/BP/HP)
 //! - ADSR envelope
 //! - LFO (sine/triangle/saw/square/S&H) with onset delay
@@ -33,6 +34,8 @@ pub mod math;
 pub mod noise;
 pub mod osc;
 pub mod smoother;
+pub mod wavetable;
+pub mod wavetable_factory;
 
 pub use envelope::Envelope;
 pub use filter::MoogFilter;
@@ -42,3 +45,5 @@ pub use math::{fast_tanh, midi_to_freq, soft_clip};
 pub use noise::Noise;
 pub use osc::{OscMode, Oscillator};
 pub use smoother::Smoother;
+pub use wavetable::{Spectrum, Wavetable, WavetableBank};
+pub use wavetable_factory::{factory_bank, FACTORY_TABLE_NAMES};
