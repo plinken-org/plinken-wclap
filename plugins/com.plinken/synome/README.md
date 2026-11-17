@@ -41,14 +41,16 @@ engine. The NNUE match-sound feature is not ported yet.
 - **Wavetable: import and a display.** Only the generated factory bank is
   selectable. User tables (Serum-style WAV, 2048 samples per frame) need an
   FFT of the imported cycles into `Spectrum`, a state chunk to carry them,
-  and a picker with a waveform view in the faceplate.
+  and a waveform view beside the faceplate's table menu.
 - **Analog oscillator aliases.** `process_analog` is a naive saw and a fixed
   50 % pulse; it needs PolyBLEP and a pulse width.
 
 ## Wavetable engine
 
-In `WTbl` mode an oscillator scans one of ten factory tables (`Table` pot:
-Basic, PWM, Harm, Reso, Vowel, Sync, FM, Fold, Organ, Glass), 32 frames each.
+In `WTbl` mode an oscillator scans one of ten factory tables (Basic, PWM,
+Harm, Reso, Vowel, Sync, FM, Fold, Organ, Glass), 32 frames each, chosen from
+the `Wavetable` menu in the oscillator card's header. Choosing a table while
+the oscillator is in another mode switches it to `WTbl`.
 `Shape` is the position in the table. `W.LFO` / `W.Env` route the LFO and the
 mod envelope to the position, by the shared `W.Mod` amount (bipolar) — the
 same arrangement as `P.LFO` / `P.Env` / `P.Mod` for pitch.
